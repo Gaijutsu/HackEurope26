@@ -51,60 +51,60 @@
             transparent 100%);
 }
 
-/* Info */
-.mood-card__info {
+/* Vote buttons */
+.mood-card__votes {
     position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    padding: 24px 20px;
-    z-index: 1;
+    top: 12px;
+    left: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    z-index: 3;
 }
 
-.mood-card__title {
-    font-family: var(--font-display);
-    font-size: 1.25rem;
-    font-weight: 600;
-    color: white;
-    margin-bottom: 4px;
-    line-height: 1.2;
-}
-
-.mood-card__subtitle {
-    font-size: 0.8rem;
-    font-weight: 300;
-    color: rgba(255, 255, 255, 0.8);
-    letter-spacing: 0.02em;
-}
-
-/* Select hint */
-.mood-card__select-hint {
-    position: absolute;
-    bottom: 20px;
-    right: 20px;
+.mood-card__vote-btn {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 8px 14px;
-    background: rgba(255, 255, 255, 0.15);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 100px;
-    font-size: 0.72rem;
-    font-weight: 500;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1.5px solid rgba(255, 255, 255, 0.35);
     color: white;
-    letter-spacing: 0.03em;
-    text-transform: uppercase;
-    opacity: 0;
-    transform: translateY(8px);
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
     transition:
-        opacity var(--transition-smooth),
-        transform var(--transition-smooth);
-    z-index: 2;
+        background 0.2s ease,
+        transform 0.2s ease,
+        color 0.2s ease,
+        box-shadow 0.2s ease;
 }
 
-.mood-card:hover .mood-card__select-hint {
-    opacity: 1;
-    transform: translateY(0);
+.mood-card__vote-btn:hover {
+    background: rgba(0, 0, 0, 0.65);
+    transform: scale(1.12);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.mood-card__vote-btn--up.mood-card__vote-btn--active {
+    background: rgba(76, 217, 100, 0.85);
+    border-color: rgba(76, 217, 100, 0.9);
+    color: white;
+    box-shadow: 0 2px 10px rgba(76, 217, 100, 0.4);
+}
+
+.mood-card__vote-btn--down.mood-card__vote-btn--down-active {
+    background: rgba(255, 69, 58, 0.85);
+    border-color: rgba(255, 69, 58, 0.9);
+    color: white;
+    box-shadow: 0 2px 10px rgba(255, 69, 58, 0.4);
+}
+
+.mood-card__vote-btn--down:hover {
+    background: rgba(255, 69, 58, 0.6);
+    border-color: rgba(255, 69, 58, 0.7);
 }

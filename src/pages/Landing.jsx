@@ -8,31 +8,19 @@ import './Landing.css'
 const MOOD_BOARDS = [
     {
         id: 1,
-        title: 'Café Culture',
-        subtitle: 'Cobblestones & croissants',
         image: '/images/mood-european-cafe.png',
-        vibe: 'romantic',
     },
     {
         id: 2,
-        title: 'Paradise Found',
-        subtitle: 'Turquoise waters & sunsets',
         image: '/images/mood-tropical-beach.png',
-        vibe: 'tropical',
     },
     {
         id: 3,
-        title: 'Alpine Escape',
-        subtitle: 'Peaks, lakes & fresh air',
         image: 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=600&h=800&fit=crop&q=80',
-        vibe: 'adventure',
     },
     {
         id: 4,
-        title: 'City Lights',
-        subtitle: 'Neon glow & rooftop views',
         image: 'https://images.unsplash.com/photo-1514565131-fce0801e5785?w=600&h=800&fit=crop&q=80',
-        vibe: 'urban',
     },
 ]
 
@@ -71,6 +59,8 @@ export default function Landing() {
     const [cityValid, setCityValid] = useState(false)
     const [searched, setSearched] = useState(false)
     const [isSearching, setIsSearching] = useState(false)
+    // Map of mood.id -> 'upvoted' | 'downvoted' | 'neither'
+    const [votes, setVotes] = useState({})
     const navigate = useNavigate()
 
     const handleDestinationChange = useCallback((val) => {
@@ -90,16 +80,47 @@ export default function Landing() {
         e.preventDefault()
         if (!destination.trim() || !cityValid) return
         setIsSearching(true)
-        // Simulate search delay for smooth animation
         setTimeout(() => {
             setIsSearching(false)
             setSearched(true)
         }, 800)
     }
 
-    const handleSelectMood = (mood) => {
-        navigate(`/plan?destination=${encodeURIComponent(destination)}&mood=${mood.id}&vibe=${mood.vibe}`)
+    const handleUpvote = (mood) => {
+        setVotes((prev) => ({
+            ...prev,
+            [mood.id]: prev[mood.id] === 'upvoted' ? 'neither' : 'upvoted',
+        }))
     }
+
+    const handleDownvote = (mood) => {
+        setVotes((prev) => ({
+            ...prev,
+            [mood.id]: prev[mood.id] === 'downvoted' ? 'neither' : 'downvoted',
+        }))
+    }
+
+    const getUpvotedCards = () =>
+        MOOD_BOARDS.filter((m) => votes[m.id] === 'upvoted')
+
+    const getDownvotedCards = () =>
+        MOOD_BOARDS.filter((m) => votes[m.id] === 'downvoted')
+
+    const getVoteState = (mood) => votes[mood.id] || 'neither'
+
+    const handleSelectMood = (mood) => {
+        navigate(`/plan?destination=${encodeURIComponent(destination)}&mood=${mood.id}&vibe`)
+    }
+
+    const handleSubmit = () => {
+        const upvoted = getUpvotedCards()
+        const downvoted = getDownvotedCards()
+        alert(
+            `Upvoted:\n${upvoted.map((m) => m.id).join(', ') || 'None'}\n\nDownvoted:\n${downvoted.map((m) => m.id).join(', ') || 'None'}`
+        )
+    }
+
+    const hasVotes = Object.values(votes).some((v) => v !== 'neither')
 
     return (
         <motion.div
@@ -214,10 +235,45 @@ export default function Landing() {
                                 <MoodBoardCard
                                     key={mood.id}
                                     mood={mood}
+                                    voteState={getVoteState(mood)}
+                                    onUpvote={() => handleUpvote(mood)}
+                                    onDownvote={() => handleDownvote(mood)}
                                     onClick={() => handleSelectMood(mood)}
                                 />
                             ))}
                         </motion.div>
+                        <AnimatePresence>
+                            {hasVotes && (
+                                <motion.div
+                                    className="landing__submit-wrap"
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, y: 10 }}
+                                    transition={{ duration: 0.4, ease: [0.4, 0, 0.2, 1] }}
+                                >
+                                    <button
+                                        type="button"
+                                        className="landing__submit-btn"
+                                        onClick={handleSubmit}
+                                    >
+                                        <span>Continue with your vibes</span>
+                                        <svg
+                                            width="20"
+                                            height="20"
+                                            viewBox="0 0 24 24"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            strokeWidth="2"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                        >
+                                            <path d="M5 12h14" />
+                                            <path d="m12 5 7 7-7 7" />
+                                        </svg>
+                                    </button>
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
                     </motion.section>
                 )}
             </AnimatePresence>
