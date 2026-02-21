@@ -64,8 +64,6 @@ from mock_data import (
     generate_mock_accommodations,
     get_city_info,
     get_airport_for_city,
-    generate_mock_local_gems,
-    generate_mock_local_travel_info,
 )
 
 # ---------------------------------------------------------------------------
@@ -435,34 +433,6 @@ def get_city_info_tool(city_name: str) -> str:
     return json.dumps(get_city_info(city_name), default=str)
 
 
-@crewai_tool("Search Local Hidden Gems")
-def search_local_gems_tool(city_name: str, interests: str = "") -> str:
-    """Search for hidden gems, local favorites, and authentic experiences in a city.
-    Looks beyond tourist traps to find places locals actually love.
-    Args:
-        city_name: Name of the city (e.g. 'Tokyo')
-        interests: Comma-separated traveler interests (e.g. 'food, art, nightlife')
-    Returns:
-        JSON string with local hidden gem recommendations.
-    """
-    interest_list = [i.strip() for i in interests.split(",")] if interests else []
-    gems = generate_mock_local_gems(city_name, interest_list)
-    return json.dumps(gems, default=str)
-
-
-@crewai_tool("Get Local Travel Info")
-def get_local_travel_info_tool(city_name: str) -> str:
-    """Get practical local travel information: transport apps, payment methods,
-    tipping customs, language tips, SIM cards, and local etiquette.
-    Args:
-        city_name: Name of the city (e.g. 'Tokyo')
-    Returns:
-        JSON string with local travel logistics information.
-    """
-    info = generate_mock_local_travel_info(city_name)
-    return json.dumps(info, default=str)
-
-
 # ---------------------------------------------------------------------------
 # CrewAI Agent definitions
 # ---------------------------------------------------------------------------
@@ -538,63 +508,6 @@ def _build_agents():
         max_iter=5,
     )
 
-    # Local hidden gems expert — finds authentic local places beyond tourist traps
-    local_expert_tools = list(_web_search_tools)
-    if _scrape_tool:
-        local_expert_tools.append(_scrape_tool)
-    local_expert_tools.append(search_local_gems_tool)
-    local_expert_tools.append(get_city_info_tool)
-
-    local_expert = Agent(
-        role="Local Hidden Gems Expert",
-        goal=(
-            "Find authentic local places, hidden gems, and off-the-beaten-path experiences "
-            "that go beyond typical tourist attractions. Focus on places locals actually love, "
-            "influenced by the traveler's specific interests and local specialties."
-        ),
-        backstory=(
-            "You are a well-connected local insider who has lived in cities around the world. "
-            "You know the neighbourhood bars where chefs drink after service, the tiny galleries "
-            "that don't advertise, and the street food stalls that only appear on certain days. "
-            "You despise tourist traps and always recommend places where you'd actually take a "
-            "close friend. You use TripAdvisor local reviews, food blogs, and community "
-            "recommendations to find the real gems. You always explain WHY a place is special "
-            "and what makes it different from the tourist version."
-        ),
-        tools=local_expert_tools,
-        llm=_llm_name(),
-        verbose=VERBOSE,
-        allow_delegation=False,
-        max_iter=8,
-    )
-
-    # Local travel logistics advisor — practical travel tips
-    travel_advisor_tools = list(_web_search_tools)
-    travel_advisor_tools.append(get_local_travel_info_tool)
-
-    local_travel_advisor = Agent(
-        role="Local Travel Logistics Advisor",
-        goal=(
-            "Provide comprehensive practical travel information for the destination: "
-            "which apps to install before the trip, how local transport payment works, "
-            "tipping customs, useful language phrases, SIM card options, and important "
-            "local etiquette rules that tourists often get wrong."
-        ),
-        backstory=(
-            "You are a seasoned expat and travel logistics expert who has navigated "
-            "public transport, payment systems, and cultural norms in dozens of countries. "
-            "You know which apps save hours of confusion, which payment mistakes to avoid, "
-            "and which cultural faux pas can ruin an interaction. You focus on PRACTICAL, "
-            "ACTIONABLE advice — not generic travel tips. You always test your own advice "
-            "and update it based on the latest local information."
-        ),
-        tools=travel_advisor_tools,
-        llm=_llm_name(),
-        verbose=VERBOSE,
-        allow_delegation=False,
-        max_iter=5,
-    )
-
     planner_tools = [get_city_info_tool]
     planner_tools.extend(_web_search_tools)
 
@@ -602,32 +515,24 @@ def _build_agents():
         role="Itinerary Planner",
         goal=(
             "Create a detailed day-by-day itinerary with SPECIFIC named places for every "
-            "activity and meal, structured as DAILY ROUTES through the city. Each day should "
-            "follow either a LOOP (hotel → area A → area B → hotel) or a LINEAR path "
-            "(hotel → A → B → C, then transit back). Use the neighbourhood connectivity "
-            "data to plan routes through 2-4 ADJACENT areas per day. Never say 'find a "
-            "local restaurant' — always name the exact place. Include a Google Maps link "
-            "for every location."
+            "activity and meal, arranged so that consecutive activities are GEOGRAPHICALLY "
+            "CLOSE to each other. Cluster activities by neighbourhood to minimise travel "
+            "time. Never say 'find a local restaurant' — always name the exact restaurant, "
+            "cafe, or food stall. Include a Google Maps link for every location."
         ),
         backstory=(
-            "You are an expert itinerary designer, local food critic, and city route "
-            "planner who creates daily walking routes through cities. You think of each "
-            "day as a GEOGRAPHIC ROUTE — not a random list of places. You use the "
-            "'neighbourhood_travel' data to understand which areas are adjacent and how "
-            "long it takes to travel between them. You use the 'suggested_routes' as "
-            "templates and customise them based on traveler interests.\n\n"
-            "Your route philosophy:\n"
-            "- LOOP ROUTE: Start near hotel → walk outward through 2-3 adjacent areas "
-            "→ circle back to hotel area. Great for days with evening dinner plans near "
-            "the hotel.\n"
-            "- LINEAR ROUTE: Start near hotel → travel in one direction through 3-4 "
-            "areas → end at a transit hub and take train/bus/rideshare back. Great for "
-            "covering more ground.\n\n"
-            "You pick meals at restaurants IN the area you're exploring at that time of "
-            "day. You ALWAYS recommend places by name (e.g. 'Ichiran Ramen Shibuya', "
-            "'Le Bouillon Chartier'). You never use generic phrases. You include a "
-            "Google Maps URL for every location. You understand local currencies and "
-            "always show prices in the local currency with a USD equivalent."
+            "You are an expert itinerary designer, local food critic, and city logistics "
+            "planner who knows specific restaurants, cafes, and street food stalls in every "
+            "major city. Your TOP PRIORITY is geographic efficiency: you group activities "
+            "by neighbourhood so travellers walk between consecutive stops instead of "
+            "criss-crossing the city. You plan meals at restaurants NEAR the attractions "
+            "being visited that part of the day — breakfast near the hotel, lunch near the "
+            "morning's sights, dinner near the afternoon area or back near the hotel. "
+            "You ALWAYS recommend places by name (e.g. 'Ichiran Ramen Shibuya', "
+            "'Le Bouillon Chartier'). You never use generic phrases like 'find a local "
+            "restaurant' or 'try local food'. You include a Google Maps URL for every "
+            "single location in the itinerary. You understand local currencies and always "
+            "show prices in the local currency with a USD equivalent."
         ),
         tools=planner_tools,
         llm=_llm_name(),
@@ -639,10 +544,8 @@ def _build_agents():
     return (
         destination_researcher,
         city_selector,
-        local_expert,
         flight_finder,
         accommodation_finder,
-        local_travel_advisor,
         itinerary_planner,
     )
 
@@ -659,10 +562,8 @@ def _build_tasks(
     (
         researcher_agent,
         selector_agent,
-        local_expert_agent,
         flight_agent,
         accommodation_agent,
-        local_travel_agent,
         planner_agent,
     ) = agents
 
@@ -735,48 +636,6 @@ Return a JSON array with just this city: ["{dest}"]"""
         callback=_make_callback("CitySelector", f"Cities selected for {dest}"),
     )
 
-    local_gems_task = Task(
-        description=f"""Find hidden gems and authentic local experiences in **{dest}** that go beyond
-typical tourist attractions.
-
-Traveler interests: {interests}
-Budget level: {budget}
-Trip duration: {duration} days
-
-Using the cities selected in context, search for local hidden gems using the
-Search Local Hidden Gems tool for each city. Also use web search if available
-to find TripAdvisor "locals recommend" lists, food blogs, and off-the-beaten-path
-experiences.
-
-Focus on:
-- Authentic restaurants and food experiences locals actually frequent
-- Neighbourhoods and markets tourists typically miss
-- Unique cultural experiences tied to local traditions
-- Places that match the traveler's specific interests: {interests}
-- Local specialties and seasonal events
-
-Return a JSON array of hidden gems:
-[
-  {{
-    "name": "Place Name",
-    "category": "hidden_gem|local_favorite|authentic_experience",
-    "description": "What this place is and what you'll experience",
-    "why_special": "Why this is better than the tourist alternative",
-    "best_for": ["food", "culture"],
-    "neighborhood": "District/Area name",
-    "city": "City name",
-    "google_maps_url": "https://www.google.com/maps/search/Place+Name+City",
-    "source": "Where this recommendation comes from"
-  }}
-]
-
-Return ONLY valid JSON.""",
-        expected_output="A JSON array of hidden gem recommendations with descriptions and Google Maps links.",
-        agent=local_expert_agent,
-        context=[research_task, city_task],
-        callback=_make_callback("LocalExpert", f"Found hidden gems in {dest}"),
-    )
-
     flight_task = Task(
         description=f"""Find flights for this trip using the Search Flights tool.
 
@@ -837,104 +696,43 @@ Return ONLY valid JSON.""",
         callback=_make_callback("AccommodationFinder", "Accommodation search complete"),
     )
 
-    local_travel_task = Task(
-        description=f"""Gather comprehensive practical travel information for **{dest}**.
-
-Using the cities selected in context, get local travel information using the
-Get Local Travel Info tool for each city. Also use web search if available to
-find the most up-to-date information.
-
-Provide a JSON object covering ALL of these categories:
-{{
-  "transport_apps": [
-    {{"name": "App Name", "description": "What it does and why you need it", "type": "essential|recommended|helpful"}}
-  ],
-  "payment_info": {{
-    "currency": "XXX (symbol)",
-    "cash_preferred": true/false,
-    "cards_accepted": "Description of card acceptance",
-    "tips": "Practical money tips for visitors"
-  }},
-  "tipping_customs": "Clear description of tipping norms",
-  "language_tips": "Key phrases and communication advice",
-  "sim_and_connectivity": "How to get data/WiFi",
-  "local_etiquette": ["Rule 1", "Rule 2", "Rule 3"]
-}}
-
-Be SPECIFIC and PRACTICAL — not generic. Include real app names, actual prices,
-and local customs that tourists commonly get wrong.
-
-Return ONLY valid JSON.""",
-        expected_output="A JSON object with transport apps, payment info, tipping customs, language tips, SIM info, and local etiquette.",
-        agent=local_travel_agent,
-        context=[research_task, city_task],
-        callback=_make_callback("LocalTravelAdvisor", f"Local travel info for {dest} compiled"),
-    )
-
     itinerary_task = Task(
         description=f"""Create a {duration}-day itinerary for {dest} ({start} to {end}).
 
 Context from previous agents: destination research (including neighbourhood layout with
-attractions grouped by district, TRAVEL TIMES between areas, and SUGGESTED ROUTES),
-selected cities, flights, and accommodations (including hotel name and neighbourhood).
-You also have LOCAL HIDDEN GEMS from the Local Expert — weave 1-2 of these into
-each day's itinerary where they fit naturally with the route.
+attractions grouped by district), selected cities, flights, and accommodations (including
+hotel name and neighbourhood for each city).
 
 Travelers: {travelers} | Interests: {interests} | Diet: {dietary} | Budget: {budget}
 
-PLANNING APPROACH — ROUTE-BASED DAILY PLANNING:
-1. Use the Get City Information tool for each city. The result includes:
-   - "neighbourhoods": areas with attractions and food
-   - "neighbourhood_travel": travel times between each pair of areas
-   - "suggested_routes": pre-built loop and linear route templates
-   - "transit_hubs": stations for getting back to the hotel
-
-2. Note the HOTEL NAME and NEIGHBOURHOOD from the accommodation context.
-
-3. For each day, design a ROUTE — not a random list. Choose one of two patterns:
-
-   **LOOP ROUTE** (hotel → A → B → C → hotel):
-   - Best for half-days or when dinner should be near the hotel
-   - Pick 2-3 ADJACENT areas that connect back to the hotel area
-   - Use the "neighbourhood_travel" data to confirm they connect
-   - Morning: explore area A (near hotel), lunch in area A
-   - Afternoon: walk to area B, explore, walk to area C
-   - Evening: return to hotel area for dinner
-
-   **LINEAR ROUTE** (hotel → A → B → C → transit back):
-   - Best for full days exploring further-out areas
-   - Pick 3-4 areas in a LINE moving away from the hotel
-   - End at or near a "transit_hub" for easy return
-   - Morning: explore first area, lunch there or in next area
-   - Afternoon: continue along the line
-   - Evening: dinner in the final area, then transit/rideshare back
-
-4. Vary the routes across days so different parts of the city are covered.
-   Refer to "suggested_routes" for inspiration but customise based on interests.
-
-5. Between activities, the next stop MUST be reachable by walking or a short
-   transit hop (check "neighbourhood_travel" times). NEVER jump to a
-   non-adjacent area mid-route.
+PLANNING APPROACH:
+- First, note the HOTEL NAME and NEIGHBOURHOOD from the accommodation context for each city.
+- Use the "neighbourhoods" data from city research to understand which attractions and
+  restaurants are in the SAME district.
+- Plan each day by picking ONE or TWO adjacent neighbourhoods and filling the day with
+  activities, meals, and sights from those areas.
+- Use the Get City Information tool for any city to see its neighbourhood breakdown.
 
 CRITICAL RULES:
-1. **ROUTE-BASED DAILY PLANS** — This is the MOST IMPORTANT rule. Each day must follow
-   a geographic ROUTE (loop or linear) through 2-4 CONNECTED areas. Use the
-   "neighbourhood_travel" data to verify adjacency. Consecutive stops must be
-   in the SAME area or an ADJACENT area (connected in neighbourhood_travel).
-2. **Breakfast near the hotel** — always within walking distance of accommodation.
-3. **Lunch and dinner IN the area you're exploring** — pick restaurants from the
-   neighbourhood you're visiting at that time of day.
-4. **End-of-day return** — For loop routes, dinner near hotel. For linear routes,
-   end near a transit hub and note which line/bus/rideshare to take back.
-5. **Name every restaurant/cafe/food stall specifically** — NEVER say "find a local
-   restaurant". Always give the real name (e.g. "Ichiran Ramen Shibuya").
-6. **Google Maps link for EVERY location** — format: https://www.google.com/maps/search/PLACE+NAME+CITY
-7. **Prices in local currency + USD** — e.g. "cost_local": "¥1500", "cost_usd": 10.
-   Use realistic local prices.
-8. Each day: 5-7 items including breakfast, lunch, dinner (all named specifically).
-9. Day 1 = arrival, last day = departure. Distribute cities evenly.
-10. **Add a "route_type" field** to each day: "loop" or "linear", and a
-    "areas_visited" field listing the neighbourhoods in route order.
+1. **GEOGRAPHIC PROXIMITY** — This is the MOST IMPORTANT rule. Within each day, order
+   activities so consecutive stops are CLOSE TOGETHER. Cluster by neighbourhood:
+   - Start each day at or very near the accommodation.
+   - Pick breakfast within WALKING DISTANCE of the hotel (< 1 km).
+   - Group morning activities in the SAME neighbourhood. Pick lunch near those sights.
+   - Group afternoon activities in a SINGLE nearby area. Pick dinner near that area or
+     back near the hotel.
+   - NEVER jump across the city between consecutive items (e.g. don't go from a hotel
+     in Shinjuku to a café in Asakusa and back to Shibuya).
+   - Add the specific neighbourhood/district in each "location" field so proximity is
+     verifiable (e.g. "Café de Flore, Saint-Germain-des-Prés, Paris").
+2. **Name every restaurant/cafe/food stall specifically** — NEVER say "find a local restaurant"
+   or "try local food". Always give the real name (e.g. "Ichiran Ramen Shibuya", "Pizzeria Da
+   Michele", "Cafe de Flore").
+3. **Google Maps link for EVERY location** — format: https://www.google.com/maps/search/PLACE+NAME+CITY
+4. **Prices in local currency + USD** — e.g. "cost_local": "¥1500", "cost_usd": 10.
+   Use realistic local prices. A bowl of ramen in Tokyo is ~¥1000-1500 ($7-10), NOT $2000.
+5. Each day: 5-7 items including breakfast, lunch, dinner (all named specifically).
+6. Day 1 = arrival, last day = departure. Distribute cities evenly.
 
 Return a JSON array:
 [
@@ -942,8 +740,6 @@ Return a JSON array:
     "day_number": 1,
     "date": "YYYY-MM-DD",
     "city": "CityName",
-    "route_type": "loop",
-    "areas_visited": ["Neighbourhood A", "Neighbourhood B", "Neighbourhood A"],
     "items": [
       {{
         "start_time": "09:00",
@@ -965,11 +761,11 @@ Return a JSON array:
 Return ONLY valid JSON.""",
         expected_output="A JSON array of day objects with specific named locations, Google Maps URLs, and local currency prices.",
         agent=planner_agent,
-        context=[research_task, city_task, local_gems_task, flight_task, accommodation_task, local_travel_task],
+        context=[research_task, city_task, flight_task, accommodation_task],
         callback=_make_callback("ItineraryPlanner", "Itinerary planning complete"),
     )
 
-    return [research_task, city_task, local_gems_task, flight_task, accommodation_task, local_travel_task, itinerary_task]
+    return [research_task, city_task, flight_task, accommodation_task, itinerary_task]
 
 
 # ---------------------------------------------------------------------------
@@ -987,7 +783,7 @@ def _parse_crew_result(
     duration = _calc_duration(start, end)
     is_country = _is_likely_country(dest)
 
-    research_task, city_task, local_gems_task, flight_task, accommodation_task, local_travel_task, itinerary_task = tasks
+    research_task, city_task, flight_task, accommodation_task, itinerary_task = tasks
 
     # --- Parse cities ---
     cities = [dest]
@@ -1032,15 +828,15 @@ def _parse_crew_result(
         city_code = _city_iata(city)
         raw_hotels = _amadeus_hotels_fn(city_code, start, end, travelers, "hotel")
         if not raw_hotels or (isinstance(raw_hotels, list) and raw_hotels and "error" in raw_hotels[0]):
-            hotels = generate_mock_accommodations(city, start, end, travelers)
+            hotels = generate_mock_accommodations(city, start, end, travelers)[:3]
         elif _is_mock_accom(raw_hotels[0]):
-            hotels = raw_hotels
+            hotels = raw_hotels[:3]
         else:
             # Live Amadeus format → normalise to DB schema
-            hotels = _normalize_amadeus_hotels(raw_hotels, city, start, end)
+            hotels = _normalize_amadeus_hotels(raw_hotels, city, start, end)[:3]
             if not hotels:
-                hotels = generate_mock_accommodations(city, start, end, travelers)
-        accommodations.extend(hotels)
+                hotels = generate_mock_accommodations(city, start, end, travelers)[:3]
+        accommodations.extend(hotels[:3])
 
     # --- Parse itinerary ---
     itinerary: list[dict] = []
@@ -1076,38 +872,6 @@ def _parse_crew_result(
     if not itinerary:
         itinerary = _build_fallback_itinerary(cities, duration, start)
 
-    # --- Parse local hidden gems ---
-    local_gems: list[dict] = []
-    try:
-        gems_raw = local_gems_task.output.raw if local_gems_task.output else "[]"
-        parsed_gems = _safe_json_parse(gems_raw)
-        if isinstance(parsed_gems, list) and len(parsed_gems) > 0:
-            local_gems = parsed_gems
-            for gem in local_gems:
-                if not gem.get("google_maps_url"):
-                    place = gem.get("name", "")
-                    city_name = gem.get("city", dest)
-                    gem["google_maps_url"] = _gmaps_url(place, city_name)
-    except Exception:
-        pass
-    if not local_gems:
-        interests_list = trip_data.get("interests", [])
-        for city in cities:
-            local_gems.extend(generate_mock_local_gems(city, interests_list))
-
-    # --- Parse local travel info ---
-    local_travel_info: dict = {}
-    try:
-        travel_raw = local_travel_task.output.raw if local_travel_task.output else "{}"
-        parsed_travel = _safe_json_parse(travel_raw)
-        if isinstance(parsed_travel, dict) and len(parsed_travel) > 0:
-            local_travel_info = parsed_travel
-    except Exception:
-        pass
-    if not local_travel_info:
-        # Merge travel info from all cities (first city takes priority)
-        local_travel_info = generate_mock_local_travel_info(cities[0])
-
     summary = f"Planned {duration} days across {', '.join(cities)}"
 
     return {
@@ -1115,8 +879,6 @@ def _parse_crew_result(
         "flights": flights,
         "accommodations": accommodations,
         "itinerary": itinerary,
-        "local_gems": local_gems,
-        "local_travel_info": local_travel_info,
         "is_country_level": is_country,
         "planning_summary": summary,
     }
@@ -1173,9 +935,7 @@ class TripPlanner:
             tasks=tasks,
             process=Process.sequential,
             verbose=VERBOSE,
-            tracing=TRACING,
-            memory=True,  # enables memory
-            cache=True,    # enables tool result caching
+            tracing=TRACING
         )
         crew.kickoff()
         return _parse_crew_result(tasks, trip_data)
@@ -1188,20 +948,16 @@ class TripPlanner:
         agent_order = [
             "DestinationResearcher",
             "CitySelector",
-            "LocalExpert",
             "FlightFinder",
             "AccommodationFinder",
-            "LocalTravelAdvisor",
             "ItineraryPlanner",
         ]
 
         agent_start_messages = {
             "DestinationResearcher": f"Researching {trip_data['destination']}...",
             "CitySelector": f"Selecting cities in {trip_data['destination']}...",
-            "LocalExpert": f"Finding hidden gems and local favorites in {trip_data['destination']}...",
             "FlightFinder": "Searching for flights via Amadeus...",
             "AccommodationFinder": "Finding accommodations via Amadeus...",
-            "LocalTravelAdvisor": f"Compiling local travel tips for {trip_data['destination']}...",
             "ItineraryPlanner": "Building your day-by-day itinerary...",
         }
 
@@ -1216,9 +972,6 @@ class TripPlanner:
             tasks=tasks,
             process=Process.sequential,
             verbose=VERBOSE,
-            tracing=TRACING,
-            memory=True,
-            cache=True,
         )
 
         import threading
@@ -1306,167 +1059,6 @@ class TripPlanner:
     @staticmethod
     def _is_likely_country(destination: str) -> bool:
         return _is_likely_country(destination)
-
-    @staticmethod
-    def regenerate_itinerary(trip_data: Dict[str, Any], plan_data: Dict[str, Any],
-                              selected_flights: list[dict],
-                              selected_accommodations: list[dict]) -> Dict[str, Any]:
-        """Re-run ONLY the ItineraryPlanner agent using cached location data.
-
-        This avoids re-running the research, city selector, local-expert, flight,
-        and accommodation agents.  The previously discovered destination research,
-        cities, local gems, and local travel info are injected as context so the
-        itinerary planner can build a new plan around the user's chosen flights
-        and accommodations.
-
-        Returns a dict with the new ``itinerary`` list (same shape as plan_data["itinerary"]).
-        """
-        dest = trip_data["destination"]
-        start = trip_data["start_date"]
-        end = trip_data["end_date"]
-        travelers = trip_data.get("num_travelers", 1)
-        interests = ", ".join(trip_data.get("interests", [])) or "general sightseeing"
-        dietary = ", ".join(trip_data.get("dietary_restrictions", [])) or "none"
-        budget = trip_data.get("budget_level", "mid")
-        duration = _calc_duration(start, end)
-
-        cities = plan_data.get("cities", [dest])
-
-        # Build a compact context summary from cached plan data
-        cached_research = json.dumps({
-            "cities": cities,
-            "local_gems_count": len(plan_data.get("local_gems", [])),
-            "local_travel_info_available": bool(plan_data.get("local_travel_info")),
-        })
-
-        # Summarise selected flights / accommodations for the planner
-        flight_summary = json.dumps(selected_flights, default=str)
-        accom_summary = json.dumps(selected_accommodations, default=str)
-        gems_summary = json.dumps(plan_data.get("local_gems", [])[:15], default=str)
-
-        # Build a single itinerary-planning task with all context baked in
-        planner_tools = [get_city_info_tool]
-        planner_tools.extend(_web_search_tools)
-
-        itinerary_planner = Agent(
-            role="Itinerary Planner",
-            goal=(
-                "Create a detailed day-by-day itinerary with SPECIFIC named places for every "
-                "activity and meal, structured as DAILY ROUTES through the city."
-            ),
-            backstory=(
-                "You are an expert itinerary designer who creates daily walking routes "
-                "through cities.  You think of each day as a GEOGRAPHIC ROUTE.  You pick "
-                "meals at restaurants IN the area you're exploring.  You ALWAYS recommend "
-                "places by name.  You include a Google Maps URL for every location."
-            ),
-            tools=planner_tools,
-            llm=_llm_name(),
-            verbose=VERBOSE,
-            allow_delegation=False,
-            max_iter=10,
-        )
-
-        regen_task = Task(
-            description=f"""Create a {duration}-day itinerary for {dest} ({start} to {end}).
-
-=== CACHED CONTEXT (do NOT re-search) ===
-Cities to visit: {json.dumps(cities)}
-
-Selected flights:
-{flight_summary}
-
-Selected accommodations:
-{accom_summary}
-
-Hidden gems to weave in:
-{gems_summary}
-
-=== TRAVELER INFO ===
-Travelers: {travelers} | Interests: {interests} | Diet: {dietary} | Budget: {budget}
-
-PLANNING RULES:
-1. Each day follows a geographic ROUTE (loop or linear) through 2-4 connected areas.
-2. Breakfast near the hotel (use the accommodation info above for hotel location).
-3. Name every restaurant/cafe specifically — never say "find a local restaurant".
-4. Google Maps link for EVERY location: https://www.google.com/maps/search/PLACE+NAME+CITY
-5. Prices in local currency + USD.
-6. Each day: 5-7 items including breakfast, lunch, dinner.
-7. Day 1 = arrival, last day = departure.
-8. Weave 1-2 hidden gems per day where they fit naturally.
-
-Return a JSON array:
-[
-  {{
-    "day_number": 1,
-    "date": "YYYY-MM-DD",
-    "city": "CityName",
-    "route_type": "loop",
-    "areas_visited": ["Area A", "Area B"],
-    "items": [
-      {{
-        "start_time": "09:00",
-        "duration_minutes": 90,
-        "title": "Breakfast at Cafe Name",
-        "description": "...",
-        "item_type": "meal",
-        "location": "Cafe Name, Neighborhood, City",
-        "google_maps_url": "https://www.google.com/maps/search/...",
-        "cost_local": "€12",
-        "cost_usd": 13,
-        "currency": "EUR",
-        "notes": ""
-      }}
-    ]
-  }}
-]
-
-Return ONLY valid JSON.""",
-            expected_output="A JSON array of day objects with itinerary items.",
-            agent=itinerary_planner,
-        )
-
-        crew = Crew(
-            agents=[itinerary_planner],
-            tasks=[regen_task],
-            process=Process.sequential,
-            verbose=VERBOSE,
-            tracing=TRACING,
-            memory=False,
-            cache=True,
-        )
-        crew.kickoff()
-
-        # Parse the new itinerary
-        itinerary: list[dict] = []
-        try:
-            itin_raw = regen_task.output.raw if regen_task.output else "[]"
-            parsed_itin = _safe_json_parse(itin_raw)
-            if isinstance(parsed_itin, list) and len(parsed_itin) > 0:
-                itinerary = parsed_itin
-                for day in itinerary:
-                    city_name = day.get("city", dest)
-                    for i, item in enumerate(day.get("items", [])):
-                        item.setdefault("id", f"day{day.get('day_number', 0)}_item{i}")
-                        item.setdefault("status", "planned")
-                        item.setdefault("delayed_to_day", None)
-                        item.setdefault("is_ai_suggested", 1)
-                        if "cost_usd" not in item:
-                            raw_cost = item.pop("cost", 0)
-                            item["cost_usd"] = raw_cost if isinstance(raw_cost, (int, float)) else 0
-                        item.setdefault("cost_local", f"${item['cost_usd']}")
-                        item.setdefault("currency", "USD")
-                        item["cost"] = item["cost_usd"]
-                        if not item.get("google_maps_url"):
-                            loc = item.get("location", item.get("title", city_name))
-                            item["google_maps_url"] = _gmaps_url(loc, city_name)
-        except Exception:
-            pass
-
-        if not itinerary:
-            itinerary = _build_fallback_itinerary(cities, duration, start)
-
-        return {"itinerary": itinerary}
 
 
 # Singleton consumed by main.py via `from agents import planning_agent`
