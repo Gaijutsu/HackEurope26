@@ -153,6 +153,25 @@
     color: var(--text-primary);
 }
 
+.plan__label-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.plan__required-tag {
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--accent-deep);
+    background: rgba(232, 196, 200, 0.15);
+    padding: 2px 8px;
+    border-radius: 4px;
+    opacity: 0.8;
+}
+
 .plan__row {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -193,6 +212,22 @@
 .plan__input:focus {
     border-color: var(--accent);
     box-shadow: 0 0 0 4px rgba(232, 196, 200, 0.12);
+}
+
+.plan__input--error {
+    border-color: #ff4d4d !important;
+    background: rgba(255, 77, 77, 0.02);
+}
+
+.plan__input--error:focus {
+    box-shadow: 0 0 0 4px rgba(255, 77, 77, 0.1);
+}
+
+.plan__error-text {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: #ff4d4d;
+    margin-top: 4px;
 }
 
 .plan__input::placeholder {
@@ -271,6 +306,10 @@
 .plan__chip--active:hover {
     color: white;
     background: linear-gradient(135deg, var(--accent) 0%, var(--accent-deep) 100%);
+}
+
+.plan__chip--error {
+    border-color: rgba(255, 77, 77, 0.4);
 }
 
 /* Textarea */
