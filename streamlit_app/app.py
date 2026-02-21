@@ -4,6 +4,7 @@ Streamlit Main App - Entry point with navigation
 import streamlit as st
 import requests
 import json
+import time
 
 # Configure page
 st.set_page_config(
@@ -74,6 +75,7 @@ def main():
 
 def show_login():
     st.title("Welcome to Agentic Trip Planner 🤖✈️")
+    st.caption("Powered by **CrewAI** multi-agent orchestration")
     
     col1, col2, col3 = st.columns([1, 2, 1])
     
@@ -354,9 +356,17 @@ def show_planning():
         st.error("No trip selected")
         return
     
-    st.title("🤖 AI is Planning Your Trip...")
+    st.title("🤖 AI Agents Planning Your Trip...")
     
-    # Get trip details
+    # Agent pipeline visual
+    AGENTS = [
+        ("🔍", "Destination Researcher", "Researching your destination with web search"),
+        ("🏙️", "City Selector", "Choosing optimal cities to visit"),
+        ("✈️", "Flight Finder", "Searching for the best flights"),
+        ("🏨", "Accommodation Finder", "Finding perfect places to stay"),
+        ("📅", "Itinerary Planner", "Building your day-by-day plan"),
+    ]
+    
     try:
         trip_response = requests.get(
             f"{API_URL}/trips/{trip_id}",
@@ -365,68 +375,152 @@ def show_planning():
         
         if trip_response.status_code == 200:
             trip = trip_response.json()
-            
             st.write(f"### {trip['title']}")
             st.write(f"📍 {trip['destination']} | 📅 {trip['start_date']} to {trip['end_date']}")
+            st.divider()
             
-            # Check planning status
-            status_response = requests.get(
-                f"{API_URL}/trips/{trip_id}/plan/status",
-                params={"user_id": st.session_state.user["id"]}
-            )
+            status = trip.get("planning_status", "pending")
             
-            if status_response.status_code == 200:
-                status_data = status_response.json()
-                status = status_data["planning_status"]
-                
-                if status == "pending":
-                    # Start planning
-                    with st.spinner("Starting AI planning..."):
-                        plan_response = requests.post(
-                            f"{API_URL}/trips/{trip_id}/plan",
-                            params={"user_id": st.session_state.user["id"]}
-                        )
-                        
-                        if plan_response.status_code == 200:
-                            st.success("Planning completed!")
-                            st.session_state.current_page = "itinerary"
-                            st.rerun()
-                        else:
-                            st.error("Planning failed. Please try again.")
-                
-                elif status == "in_progress":
-                    st.info("🔄 AI is working on your plan...")
-                    st.progress(50)
-                    st.write("- Researching destinations...")
-                    st.write("- Finding best flights...")
-                    st.write("- Curating accommodations...")
-                    st.write("- Building your itinerary...")
-                    
-                    # Auto-refresh
-                    st.button("🔄 Check Status", on_click=lambda: None)
-                
-                elif status == "completed":
-                    st.success("✅ Planning completed!")
-                    st.balloons()
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.button("View Itinerary", type="primary", use_container_width=True):
-                            st.session_state.current_page = "itinerary"
-                            st.rerun()
-                    with col2:
-                        if st.button("View Flights", use_container_width=True):
-                            st.session_state.current_page = "flights"
-                            st.rerun()
-                
-                elif status == "failed":
-                    st.error("❌ Planning failed. Please try again.")
-                    if st.button("Retry Planning"):
-                        plan_response = requests.post(
-                            f"{API_URL}/trips/{trip_id}/plan",
-                            params={"user_id": st.session_state.user["id"]}
-                        )
+            if status == "completed":
+                st.success("✅ Planning already completed!")
+                st.balloons()
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    if st.button("📅 View Itinerary", type="primary", use_container_width=True):
+                        st.session_state.current_page = "itinerary"
                         st.rerun()
+                with col2:
+                    if st.button("✈️ View Flights", use_container_width=True):
+                        st.session_state.current_page = "flights"
+                        st.rerun()
+                with col3:
+                    if st.button("🏨 View Hotels", use_container_width=True):
+                        st.session_state.current_page = "accommodations"
+                        st.rerun()
+                return
+            
+            # Show agent pipeline
+            st.markdown("### 🧠 Agent Pipeline")
+            st.caption("Powered by CrewAI")
+            
+            # Create placeholder containers for each agent
+            agent_containers = []
+            for icon, name, desc in AGENTS:
+                c = st.container()
+                with c:
+                    cols = st.columns([1, 8, 3])
+                    with cols[0]:
+                        st.write(icon)
+                    with cols[1]:
+                        st.write(f"**{name}**")
+                        st.caption(desc)
+                    with cols[2]:
+                        st.write("⏳ Waiting")
+                agent_containers.append(c)
+            
+            st.divider()
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            log_container = st.expander("📋 Agent Activity Log", expanded=True)
+            
+            # Use SSE streaming for real-time progress
+            status_text.info("🚀 Starting agent pipeline...")
+            
+            try:
+                response = requests.get(
+                    f"{API_URL}/trips/{trip_id}/plan/stream",
+                    params={"user_id": st.session_state.user["id"]},
+                    stream=True,
+                    timeout=300,
+                )
+                
+                if response.status_code != 200:
+                    # Fallback to sync endpoint
+                    status_text.warning("Falling back to synchronous planning...")
+                    plan_response = requests.post(
+                        f"{API_URL}/trips/{trip_id}/plan",
+                        params={"user_id": st.session_state.user["id"]},
+                        timeout=300,
+                    )
+                    if plan_response.status_code == 200:
+                        st.success("✅ Planning completed!")
+                        st.session_state.current_page = "itinerary"
+                        st.rerun()
+                    else:
+                        st.error("Planning failed.")
+                    return
+                
+                # Process SSE events
+                agent_progress_map = {}  # node_name -> latest status
+                log_entries = []
+                
+                for line in response.iter_lines(decode_unicode=True):
+                    if not line or not line.startswith("data: "):
+                        continue
+                    
+                    try:
+                        event = json.loads(line[6:])  # strip "data: "
+                    except json.JSONDecodeError:
+                        continue
+                    
+                    event_type = event.get("type", event.get("status", ""))
+                    
+                    if event_type == "error":
+                        st.error(f"❌ Error: {event.get('message', 'Unknown error')}")
+                        return
+                    
+                    if event_type == "complete":
+                        progress_bar.progress(100)
+                        status_text.success("✅ All agents finished! Trip plan ready.")
+                        with log_container:
+                            st.write(f"✅ **Orchestrator**: Trip planning complete!")
+                        time.sleep(1)
+                        st.balloons()
+                        st.session_state.current_page = "itinerary"
+                        st.rerun()
+                        return
+                    
+                    # Progress event
+                    agent_name = event.get("agent", "Unknown")
+                    agent_status = event.get("status", "")
+                    message = event.get("message", "")
+                    
+                    # Update progress bar based on agent
+                    agent_order = {
+                        "DestinationResearcher": 1,
+                        "CitySelector": 2,
+                        "FlightFinder": 3,
+                        "AccommodationFinder": 4,
+                        "ItineraryPlanner": 5,
+                    }
+                    agent_idx = agent_order.get(agent_name, 0)
+                    if agent_status == "running":
+                        pct = int((agent_idx - 1) / 5 * 100)
+                        progress_bar.progress(min(pct, 95))
+                        status_text.info(f"🔄 **{agent_name}**: {message}")
+                    elif agent_status == "done":
+                        pct = int(agent_idx / 5 * 100)
+                        progress_bar.progress(min(pct, 95))
+                        status_text.success(f"✅ **{agent_name}**: {message}")
+                    elif agent_status == "skipped":
+                        status_text.info(f"⏭️ **{agent_name}**: {message}")
+                    
+                    with log_container:
+                        if agent_status == "running":
+                            st.write(f"🔄 **{agent_name}**: {message}")
+                        elif agent_status == "done":
+                            st.write(f"✅ **{agent_name}**: {message}")
+                        elif agent_status == "skipped":
+                            st.write(f"⏭️ **{agent_name}**: {message}")
+                
+                # If we got here without a complete event, check status
+                st.session_state.current_page = "itinerary"
+                st.rerun()
+                
+            except requests.exceptions.Timeout:
+                st.error("⏰ Planning timed out. Please try again.")
+            except requests.exceptions.ConnectionError:
+                st.error("🔌 Could not connect to server. Is the backend running?")
     except Exception as e:
         st.error(f"Error: {str(e)}")
 

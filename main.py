@@ -1,14 +1,19 @@
-"""
-FastAPI Backend - Simplified for Hackathon
-"""
+"""FastAPI Backend - Hackathon Edition with CrewAI Agents"""
+import os
+import json
+
+# Load .env before anything else
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from passlib.context import CryptContext
 from jose import JWTError, jwt
-import os
 
 from database import init_db, get_db, User, Trip, ItineraryItem, Flight, Accommodation, City
 from agents import planning_agent
@@ -19,8 +24,8 @@ init_db()
 # FastAPI app
 app = FastAPI(
     title="Agentic Trip Planner API",
-    description="Hackathon version - Simplified trip planning with AI",
-    version="1.0.0"
+    description="Hackathon version - Multi-agent trip planning with CrewAI",
+    version="2.0.0"
 )
 
 # CORS
@@ -240,20 +245,84 @@ def delete_trip(trip_id: str, user_id: str):
     
     return {"message": "Trip deleted successfully"}
 
-# Planning endpoints
+# ---------------------------------------------------------------------------
+# Planning endpoints  (CrewAI powered)
+# ---------------------------------------------------------------------------
+
+def _save_plan_to_db(db, trip, plan_data: dict):
+    """Persist the generated plan (flights, accommodations, itinerary) into DB rows."""
+    trip.plan_data = plan_data
+    trip.planning_status = "completed"
+    db.commit()
+
+    for flight in plan_data.get("flights", []):
+        db.add(Flight(
+            trip_id=trip.id,
+            flight_type=flight["flight_type"],
+            airline=flight["airline"],
+            flight_number=flight["flight_number"],
+            from_airport=flight["from_airport"],
+            to_airport=flight["to_airport"],
+            departure_datetime=flight["departure_datetime"],
+            arrival_datetime=flight["arrival_datetime"],
+            duration_minutes=flight["duration_minutes"],
+            price=flight["price"],
+            currency=flight.get("currency", "USD"),
+            booking_url=flight["booking_url"],
+            status="suggested",
+        ))
+
+    for acc in plan_data.get("accommodations", []):
+        db.add(Accommodation(
+            trip_id=trip.id,
+            name=acc["name"],
+            type=acc["type"],
+            address=acc["address"],
+            city=acc["city"],
+            check_in_date=acc["check_in_date"],
+            check_out_date=acc["check_out_date"],
+            price_per_night=acc["price_per_night"],
+            total_price=acc["total_price"],
+            currency=acc.get("currency", "USD"),
+            rating=acc.get("rating"),
+            amenities=acc.get("amenities", []),
+            booking_url=acc["booking_url"],
+            status="suggested",
+        ))
+
+    for day in plan_data.get("itinerary", []):
+        for item in day.get("items", []):
+            db.add(ItineraryItem(
+                trip_id=trip.id,
+                day_number=day["day_number"],
+                title=item["title"],
+                description=item.get("description", ""),
+                start_time=item["start_time"],
+                duration_minutes=item["duration_minutes"],
+                item_type=item["item_type"],
+                location=item.get("location", ""),
+                cost=item.get("cost", 0),
+                currency=item.get("currency", "USD"),
+                booking_url=item.get("booking_url"),
+                status="planned",
+                delayed_to_day=None,
+                is_ai_suggested=item.get("is_ai_suggested", 1),
+            ))
+
+    db.commit()
+
+
 @app.post("/trips/{trip_id}/plan")
 def start_planning(trip_id: str, user_id: str):
+    """Run the CrewAI planning pipeline synchronously."""
     db = get_db()
     trip = db.query(Trip).filter(Trip.id == trip_id, Trip.user_id == user_id).first()
-    
     if not trip:
         raise HTTPException(status_code=404, detail="Trip not found")
-    
-    # Update status
+
     trip.planning_status = "in_progress"
     db.commit()
-    
-    # Run planning agent
+
     try:
         plan_data = planning_agent.plan_trip({
             "destination": trip.destination,
@@ -262,90 +331,76 @@ def start_planning(trip_id: str, user_id: str):
             "num_travelers": trip.num_travelers,
             "interests": trip.interests,
             "dietary_restrictions": trip.dietary_restrictions,
-            "budget_level": trip.budget_level
+            "budget_level": trip.budget_level,
         })
-        
-        # Save plan data
-        trip.plan_data = plan_data
-        trip.planning_status = "completed"
-        db.commit()
-        
-        # Save flights to database
-        for flight in plan_data["flights"]:
-            db_flight = Flight(
-                trip_id=trip.id,
-                flight_type=flight["flight_type"],
-                airline=flight["airline"],
-                flight_number=flight["flight_number"],
-                from_airport=flight["from_airport"],
-                to_airport=flight["to_airport"],
-                departure_datetime=flight["departure_datetime"],
-                arrival_datetime=flight["arrival_datetime"],
-                duration_minutes=flight["duration_minutes"],
-                price=flight["price"],
-                currency=flight["currency"],
-                booking_url=flight["booking_url"],
-                status="suggested"
-            )
-            db.add(db_flight)
-        
-        # Save accommodations to database
-        for acc in plan_data["accommodations"]:
-            db_acc = Accommodation(
-                trip_id=trip.id,
-                name=acc["name"],
-                type=acc["type"],
-                address=acc["address"],
-                city=acc["city"],
-                check_in_date=acc["check_in_date"],
-                check_out_date=acc["check_out_date"],
-                price_per_night=acc["price_per_night"],
-                total_price=acc["total_price"],
-                currency=acc["currency"],
-                rating=acc.get("rating"),
-                amenities=acc["amenities"],
-                booking_url=acc["booking_url"],
-                status="suggested"
-            )
-            db.add(db_acc)
-        
-        # Save itinerary items to database
-        for day in plan_data["itinerary"]:
-            for item in day["items"]:
-                db_item = ItineraryItem(
-                    trip_id=trip.id,
-                    day_number=day["day_number"],
-                    title=item["title"],
-                    description=item.get("description", ""),
-                    start_time=item["start_time"],
-                    duration_minutes=item["duration_minutes"],
-                    item_type=item["item_type"],
-                    location=item.get("location", ""),
-                    cost=item.get("cost", 0),
-                    currency=item.get("currency", "USD"),
-                    booking_url=item.get("booking_url"),
-                    status="planned",
-                    delayed_to_day=None,
-                    is_ai_suggested=item.get("is_ai_suggested", 1)
-                )
-                db.add(db_item)
-        
-        db.commit()
-        
+
+        _save_plan_to_db(db, trip, plan_data)
+
         return {
             "status": "completed",
             "message": "Planning completed successfully!",
             "summary": plan_data["planning_summary"],
             "cities": plan_data["cities"],
-            "flights_count": len(plan_data["flights"]),
-            "accommodations_count": len(plan_data["accommodations"]),
-            "days_planned": len(plan_data["itinerary"])
+            "flights_count": len(plan_data.get("flights", [])),
+            "accommodations_count": len(plan_data.get("accommodations", [])),
+            "days_planned": len(plan_data.get("itinerary", [])),
         }
-        
     except Exception as e:
         trip.planning_status = "failed"
         db.commit()
         raise HTTPException(status_code=500, detail=f"Planning failed: {str(e)}")
+
+
+@app.get("/trips/{trip_id}/plan/stream")
+def stream_planning(trip_id: str, user_id: str):
+    """SSE endpoint - streams agent progress events as the plan is built."""
+    db = get_db()
+    trip = db.query(Trip).filter(Trip.id == trip_id, Trip.user_id == user_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    trip.planning_status = "in_progress"
+    db.commit()
+
+    trip_data = {
+        "destination": trip.destination,
+        "start_date": trip.start_date,
+        "end_date": trip.end_date,
+        "num_travelers": trip.num_travelers,
+        "interests": trip.interests,
+        "dietary_restrictions": trip.dietary_restrictions,
+        "budget_level": trip.budget_level,
+    }
+
+    def event_generator():
+        plan_data = None
+        try:
+            for event in planning_agent.plan_trip_stream(trip_data):
+                if event.get("type") == "complete":
+                    plan_data = event.get("plan", {})
+                    yield f"data: {json.dumps(event, default=str)}\n\n"
+                else:
+                    yield f"data: {json.dumps(event, default=str)}\n\n"
+
+            # Save to DB after stream completes
+            if plan_data:
+                db2 = get_db()
+                trip2 = db2.query(Trip).filter(Trip.id == trip_id).first()
+                if trip2:
+                    _save_plan_to_db(db2, trip2, plan_data)
+        except Exception as exc:
+            db3 = get_db()
+            trip3 = db3.query(Trip).filter(Trip.id == trip_id).first()
+            if trip3:
+                trip3.planning_status = "failed"
+                db3.commit()
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 @app.get("/trips/{trip_id}/plan/status")
 def get_planning_status(trip_id: str, user_id: str):
@@ -566,7 +621,18 @@ def search_cities(q: str):
 # Health check
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "version": "1.0.0"}
+    return {
+        "status": "ok",
+        "version": "2.0.0",
+        "engine": "CrewAI",
+        "agents": [
+            "DestinationResearcher",
+            "CitySelector",
+            "FlightFinder",
+            "AccommodationFinder",
+            "ItineraryPlanner",
+        ],
+    }
 
 if __name__ == "__main__":
     import uvicorn
