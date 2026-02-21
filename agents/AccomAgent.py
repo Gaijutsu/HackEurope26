@@ -76,12 +76,15 @@ def run(info: PlanningInfo, city: str) -> str:
             f"Food requirements: {', '.join(info.food_requirements) or 'none'}\n"
             f"Vibe: {info.vibe}\n"
             "Use the IATA city code when calling the search tool (e.g. LON for London). "
+            "For each accommodation option you find, you must construct a practical booking search URL "
+            "(e.g., a Google Hotels or Booking.com search link) using the hotel's exact name, city, and dates. "
             "Rank by value and flag options that best match the preferences."
         ),
         expected_output=(
             "A ranked list of accommodation options, each with: name, type, address, "
             "price per night, total price, rating, key amenities, and a short note on "
             "why it suits the traveler's preferences."
+            "AND a direct, clickable URL to search/book this specific hotel (e.g., a Google Hotels link)."
         ),
         agent=accom_agent,
     )

@@ -83,11 +83,15 @@ def run(info: PlanningInfo, origin: str) -> str:
             f"Trip vibe / preferences: {info.vibe}\n"
             + ("Prioritise sustainable, low-emission options.\n" if wants_sustainability else "")
             + "Use IATA airport codes when calling the search tool. "
+            "IMPORTANT: The search tool returns raw flight data, not booking URLs. "
+            "For each flight option you find, you must construct a practical booking search URL "
+            "(e.g., a Google Flights or Kayak link) using the origin, destination, and dates. "
             "Rank results by value (price vs. quality)."
         ),
         expected_output=(
             "A ranked list of flight options, each with: airline, flight number, "
             "departure/arrival times, price per person, and total price."
+            "AND a direct, clickable URL to search/book this specific route (e.g., a Google Flights link)."
             + (" Include a sustainability note for each option." if wants_sustainability else "")
         ),
         agent=flight_agent,
