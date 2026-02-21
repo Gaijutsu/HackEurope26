@@ -3,6 +3,7 @@ Mock data for flights and hotels - simulates external API responses
 """
 import random
 from datetime import datetime, timedelta
+import traceback
 
 # Mock airline data
 AIRLINES = {
@@ -139,7 +140,7 @@ def get_airport_for_city(city_name):
 
 def generate_mock_flights(from_city, to_city, departure_date, return_date=None, num_travelers=1):
     """Generate mock flight options"""
-
+    traceback.print_stack()
     print("MOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\n")
     from_airport = get_airport_for_city(from_city)
     to_airport = get_airport_for_city(to_city)
@@ -226,6 +227,7 @@ def generate_mock_flights(from_city, to_city, departure_date, return_date=None, 
 
 def generate_mock_accommodations(city_name, check_in, check_out, num_guests=1):
     """Generate mock hotel options"""
+    traceback.print_stack()
     print("MOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\n")
 
     hotels = HOTEL_TEMPLATES.get(city_name, DEFAULT_HOTELS)
@@ -262,49 +264,205 @@ def generate_mock_accommodations(city_name, check_in, check_out, num_guests=1):
     return accommodations
 
 def get_city_info(city_name):
-    """Get basic info about a city"""
+    """Get basic info about a city including neighbourhood/district layout"""
     city_data = {
         "Tokyo": {
             "country": "Japan",
             "description": "A dazzling mix of neon-lit modernity and ancient traditions",
             "top_attractions": ["Senso-ji Temple", "Tokyo Skytree", "Meiji Shrine", "Shibuya Crossing", "Tsukiji Outer Market"],
             "best_food": ["Sushi", "Ramen", "Tempura", "Yakitori", "Tonkatsu"],
-            "local_transport": "JR Yamanote Line, Tokyo Metro"
+            "local_transport": "JR Yamanote Line, Tokyo Metro",
+            "neighbourhoods": {
+                "Shinjuku": {
+                    "vibe": "Nightlife, shopping, skyscrapers",
+                    "attractions": ["Shinjuku Gyoen", "Golden Gai", "Kabukicho", "Tokyo Metropolitan Government Building"],
+                    "food": ["Fuunji Ramen", "Omoide Yokocho yakitori stalls", "Tsunahachi Tempura"]
+                },
+                "Shibuya": {
+                    "vibe": "Youth culture, fashion, nightlife",
+                    "attractions": ["Shibuya Crossing", "Hachiko Statue", "Shibuya Sky", "Center Gai"],
+                    "food": ["Ichiran Ramen Shibuya", "Genki Sushi Shibuya", "Uobei Sushi"]
+                },
+                "Asakusa": {
+                    "vibe": "Traditional, temples, old Tokyo",
+                    "attractions": ["Senso-ji Temple", "Nakamise Shopping Street", "Tokyo Skytree (nearby)"],
+                    "food": ["Asakusa Gyukatsu", "Sometaro Okonomiyaki", "Daikokuya Tempura"]
+                },
+                "Harajuku / Omotesando": {
+                    "vibe": "Fashion, cafes, green spaces",
+                    "attractions": ["Meiji Shrine", "Takeshita Street", "Omotesando Hills"],
+                    "food": ["Harajuku Gyozaro", "Eggs 'n Things", "Afuri Ramen Harajuku"]
+                },
+                "Ginza / Tsukiji": {
+                    "vibe": "Upscale shopping, seafood, galleries",
+                    "attractions": ["Tsukiji Outer Market", "Kabuki-za Theatre", "Ginza Six"],
+                    "food": ["Sushi Dai", "Tsukiji Tamazushi", "Ginza Kagari Ramen"]
+                },
+                "Akihabara": {
+                    "vibe": "Electronics, anime, otaku culture",
+                    "attractions": ["Electric Town", "Anime shops", "Maid cafes"],
+                    "food": ["Kanda Matsuya Soba", "CoCo Ichibanya Curry"]
+                },
+                "Ueno": {
+                    "vibe": "Museums, park, cultural hub",
+                    "attractions": ["Ueno Park", "Tokyo National Museum", "Ameya-Yokocho Market"],
+                    "food": ["Innsyoutei", "Hantei Kushiage"]
+                }
+            }
         },
         "Paris": {
             "country": "France",
             "description": "The City of Light, famous for art, fashion, and cuisine",
             "top_attractions": ["Eiffel Tower", "Louvre Museum", "Notre-Dame", "Arc de Triomphe", "Montmartre"],
             "best_food": ["Croissants", "Steak Frites", "Crepes", "Macarons", "French Onion Soup"],
-            "local_transport": "Metro, RER, Bus"
+            "local_transport": "Metro, RER, Bus",
+            "neighbourhoods": {
+                "Le Marais (3rd-4th arr.)": {
+                    "vibe": "Trendy, historic, LGBTQ-friendly",
+                    "attractions": ["Place des Vosges", "Musée Picasso", "Rue des Rosiers"],
+                    "food": ["L'As du Fallafel", "Breizh Café", "Chez Janou"]
+                },
+                "Saint-Germain-des-Prés (6th arr.)": {
+                    "vibe": "Literary cafes, boutiques, intellectual",
+                    "attractions": ["Jardin du Luxembourg", "Saint-Sulpice"],
+                    "food": ["Café de Flore", "Les Deux Magots", "Le Bouillon Racine"]
+                },
+                "Montmartre (18th arr.)": {
+                    "vibe": "Artistic, hilltop village, bohemian",
+                    "attractions": ["Sacré-Cœur", "Place du Tertre", "Moulin Rouge"],
+                    "food": ["Le Consulat", "Pink Mamma", "La Maison Rose"]
+                },
+                "Latin Quarter (5th arr.)": {
+                    "vibe": "Student district, bookshops, bistros",
+                    "attractions": ["Panthéon", "Shakespeare and Company", "Jardin des Plantes"],
+                    "food": ["Le Bouillon Chartier", "Chez René", "Odette Paris"]
+                },
+                "Champs-Élysées / Trocadéro (8th/16th arr.)": {
+                    "vibe": "Grand boulevards, luxury, landmarks",
+                    "attractions": ["Arc de Triomphe", "Eiffel Tower", "Palais de Tokyo"],
+                    "food": ["Le Relais de l'Entrecôte", "Ladurée Champs-Élysées"]
+                },
+                "Louvre / Les Halles (1st-2nd arr.)": {
+                    "vibe": "Central, museums, shopping",
+                    "attractions": ["Louvre Museum", "Palais Royal", "Les Halles"],
+                    "food": ["Stohrer", "Bistrot Benoit", "Au Pied de Cochon"]
+                }
+            }
         },
         "London": {
             "country": "UK",
             "description": "Historic capital blending royal tradition with modern culture",
             "top_attractions": ["Big Ben", "Tower of London", "British Museum", "London Eye", "Buckingham Palace"],
             "best_food": ["Fish and Chips", "Sunday Roast", "Afternoon Tea", "Curry", "Pie and Mash"],
-            "local_transport": "Tube, Bus, Overground"
+            "local_transport": "Tube, Bus, Overground",
+            "neighbourhoods": {
+                "Westminster / South Bank": {
+                    "vibe": "Landmarks, government, river views",
+                    "attractions": ["Big Ben", "London Eye", "Westminster Abbey", "Tate Modern"],
+                    "food": ["Regency Café", "Padella (Borough Market)", "The Table Café"]
+                },
+                "The City / Tower": {
+                    "vibe": "Historic core, financial district",
+                    "attractions": ["Tower of London", "St Paul's Cathedral", "Sky Garden"],
+                    "food": ["Duck & Waffle", "Ye Olde Cheshire Cheese"]
+                },
+                "Bloomsbury / Covent Garden": {
+                    "vibe": "Museums, theatres, bookshops",
+                    "attractions": ["British Museum", "Covent Garden Piazza", "Sir John Soane's Museum"],
+                    "food": ["Dishoom Covent Garden", "Flat Iron Steak", "Monmouth Coffee"]
+                },
+                "Soho / Mayfair": {
+                    "vibe": "Dining, nightlife, luxury shopping",
+                    "attractions": ["Carnaby Street", "Chinatown", "Burlington Arcade"],
+                    "food": ["Bao Soho", "Koya Bar", "Bar Italia"]
+                },
+                "South Kensington / Chelsea": {
+                    "vibe": "Museums, elegant residential",
+                    "attractions": ["V&A Museum", "Natural History Museum", "Science Museum"],
+                    "food": ["Daquise", "Comptoir Libanais"]
+                },
+                "Shoreditch / Brick Lane": {
+                    "vibe": "Street art, markets, hipster",
+                    "attractions": ["Brick Lane Market", "Spitalfields Market", "Street Art Tour"],
+                    "food": ["Beigel Bake", "Dishoom Shoreditch", "Smokestak"]
+                }
+            }
         },
         "New York": {
             "country": "USA",
             "description": "The city that never sleeps, iconic skyline and diverse culture",
             "top_attractions": ["Statue of Liberty", "Central Park", "Times Square", "Empire State Building", "Brooklyn Bridge"],
             "best_food": ["Pizza", "Bagels", "Cheesecake", "Hot Dogs", "Pastrami Sandwich"],
-            "local_transport": "Subway, Bus, Taxi"
+            "local_transport": "Subway, Bus, Taxi",
+            "neighbourhoods": {
+                "Midtown Manhattan": {
+                    "vibe": "Skyscrapers, Broadway, iconic landmarks",
+                    "attractions": ["Times Square", "Empire State Building", "Rockefeller Center", "Bryant Park"],
+                    "food": ["Joe's Pizza", "Katz's Delicatessen (LES, nearby)", "Los Tacos No.1"]
+                },
+                "Lower Manhattan / FiDi": {
+                    "vibe": "Historic, finance, waterfront",
+                    "attractions": ["Statue of Liberty (ferry)", "9/11 Memorial", "Wall Street", "Brooklyn Bridge"],
+                    "food": ["Fraunces Tavern", "Two Hands", "Prince Street Pizza"]
+                },
+                "Upper West Side / Central Park": {
+                    "vibe": "Green spaces, museums, residential",
+                    "attractions": ["Central Park", "American Museum of Natural History", "Lincoln Center"],
+                    "food": ["Jacob's Pickles", "Levain Bakery", "Barney Greengrass"]
+                },
+                "SoHo / Greenwich Village": {
+                    "vibe": "Shopping, galleries, bohemian",
+                    "attractions": ["Washington Square Park", "SoHo cast-iron buildings"],
+                    "food": ["Balthazar", "Dominique Ansel Bakery", "Mamoun's Falafel"]
+                },
+                "Williamsburg (Brooklyn)": {
+                    "vibe": "Hipster, street art, waterfront",
+                    "attractions": ["Brooklyn Bridge Park (nearby)", "Domino Park", "street art"],
+                    "food": ["Peter Luger Steak House", "Smorgasburg (weekends)", "SEY Coffee"]
+                }
+            }
         },
         "Barcelona": {
             "country": "Spain",
             "description": "Mediterranean city known for Gaudi architecture and beaches",
             "top_attractions": ["Sagrada Familia", "Park Guell", "La Rambla", "Gothic Quarter", "Casa Batllo"],
-            "best_food": ["Tapas", "Paella", "Churros", "Jamón Iberico", "Crema Catalana"],
-            "local_transport": "Metro, Bus, Tram"
+            "best_food": ["Tapas", "Paella", "Churros", "Jamón Ibérico", "Crema Catalana"],
+            "local_transport": "Metro, Bus, Tram",
+            "neighbourhoods": {
+                "Gothic Quarter (Barri Gòtic)": {
+                    "vibe": "Medieval streets, historic, central",
+                    "attractions": ["Barcelona Cathedral", "Plaça Reial", "Roman ruins"],
+                    "food": ["Bar Cañete", "Milk Bar & Bistro", "La Boqueria Market (nearby)"]
+                },
+                "Eixample": {
+                    "vibe": "Modernist architecture, grid layout, upscale",
+                    "attractions": ["Sagrada Familia", "Casa Batlló", "Casa Milà (La Pedrera)"],
+                    "food": ["Cervecería Catalana", "Tapas 24", "Parking Pizza"]
+                },
+                "El Born": {
+                    "vibe": "Trendy, artisan shops, nightlife",
+                    "attractions": ["Picasso Museum", "Basílica de Santa Maria del Mar", "Parc de la Ciutadella"],
+                    "food": ["El Xampanyet", "Cal Pep", "Paradiso Bar"]
+                },
+                "Gràcia": {
+                    "vibe": "Bohemian, local feel, plazas",
+                    "attractions": ["Park Güell", "Plaça del Sol", "Mercat de l'Abaceria"],
+                    "food": ["La Pepita", "Chivuo's", "Café Godot"]
+                },
+                "Barceloneta": {
+                    "vibe": "Beach, seafood, casual",
+                    "attractions": ["Barceloneta Beach", "Port Olímpic", "W Hotel sail building"],
+                    "food": ["La Mar Salada", "Can Paixano (La Xampanyeria)", "Restaurante Barceloneta"]
+                }
+            }
         },
     }
-    
+
     return city_data.get(city_name, {
         "country": "Unknown",
         "description": f"A beautiful destination waiting to be explored",
         "top_attractions": ["City Center", "Old Town", "Main Square", "Local Market", "Museum"],
         "best_food": ["Local Cuisine", "Street Food", "Traditional Dishes"],
-        "local_transport": "Bus, Metro, Taxi"
+        "local_transport": "Bus, Metro, Taxi",
+        "neighbourhoods": {}
     })

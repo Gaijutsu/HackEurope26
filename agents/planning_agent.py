@@ -108,6 +108,162 @@ def _is_mock_accom(a: dict) -> bool:
     return "name" in a and "price_per_night" in a and "check_in_date" in a
 
 
+# Well-known IATA carrier codes → human-readable names (fallback for when
+# the Amadeus `dictionaries` block is not available).
+_CARRIER_NAMES: dict[str, str] = {
+    "AA": "American Airlines", "DL": "Delta Air Lines", "UA": "United Airlines",
+    "LH": "Lufthansa", "BA": "British Airways", "AF": "Air France",
+    "KL": "KLM", "EK": "Emirates", "QR": "Qatar Airways",
+    "JL": "Japan Airlines", "NH": "ANA", "SQ": "Singapore Airlines",
+    "CX": "Cathay Pacific", "AY": "Finnair", "IB": "Iberia",
+    "VS": "Virgin Atlantic", "TK": "Turkish Airlines", "LX": "Swiss",
+    "OS": "Austrian Airlines", "SK": "SAS", "AZ": "ITA Airways",
+    "QF": "Qantas", "AC": "Air Canada", "WN": "Southwest Airlines",
+    "B6": "JetBlue", "AS": "Alaska Airlines", "HA": "Hawaiian Airlines",
+    "PR": "Philippine Airlines", "MH": "Malaysia Airlines",
+    "TG": "Thai Airways", "VN": "Vietnam Airlines", "GA": "Garuda Indonesia",
+    "KE": "Korean Air", "OZ": "Asiana Airlines", "CI": "China Airlines",
+    "BR": "EVA Air", "CZ": "China Southern", "MU": "China Eastern",
+    "CA": "Air China", "EY": "Etihad Airways", "WS": "WestJet",
+    "FR": "Ryanair", "U2": "easyJet", "W6": "Wizz Air",
+}
+
+
+def _parse_iso_duration(iso: str) -> int:
+    """Convert ISO-8601 duration (e.g. 'PT14H15M') to total minutes."""
+    import re
+    m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?", iso or "")
+    if not m:
+        return 0
+    hours = int(m.group(1) or 0)
+    mins = int(m.group(2) or 0)
+    return hours * 60 + mins
+
+
+def _normalize_amadeus_flights(raw_offers: list[dict], origin_city: str,
+                                dest_city: str) -> list[dict]:
+    """Convert Amadeus FlightOffer objects into the DB-compatible schema.
+
+    Each Amadeus offer may contain 1 itinerary (one-way) or 2 (round-trip).
+    We flatten each itinerary into a separate DB row.
+    """
+    normalized: list[dict] = []
+    for idx, offer in enumerate(raw_offers):
+        carriers_dict = offer.get("_carriers", {})
+        price_total = float(offer.get("price", {}).get("grandTotal",
+                            offer.get("price", {}).get("total", 0)))
+        currency = offer.get("price", {}).get("currency", "USD")
+
+        for itin_idx, itin in enumerate(offer.get("itineraries", [])):
+            segments = itin.get("segments", [])
+            if not segments:
+                continue
+
+            first_seg = segments[0]
+            last_seg = segments[-1]
+
+            carrier_code = first_seg.get("carrierCode", "")
+            airline_name = (carriers_dict.get(carrier_code)
+                           or _CARRIER_NAMES.get(carrier_code)
+                           or carrier_code)
+            flight_number = f"{carrier_code}{first_seg.get('number', '')}"
+
+            from_airport = first_seg.get("departure", {}).get("iataCode", "")
+            to_airport = last_seg.get("arrival", {}).get("iataCode", "")
+            dep_dt = first_seg.get("departure", {}).get("at", "")
+            arr_dt = last_seg.get("arrival", {}).get("at", "")
+            duration_min = _parse_iso_duration(itin.get("duration", ""))
+
+            # Determine flight type from itinerary index
+            flight_type = "outbound" if itin_idx == 0 else "return"
+
+            # Build booking URL (generic search fallback)
+            booking_url = (
+                f"https://www.google.com/travel/flights?q="
+                f"{from_airport}+to+{to_airport}+{dep_dt[:10]}"
+            )
+
+            normalized.append({
+                "id": f"flight_{flight_type}_{idx}",
+                "flight_type": flight_type,
+                "airline": airline_name,
+                "flight_number": flight_number,
+                "from_airport": from_airport,
+                "to_airport": to_airport,
+                "departure_datetime": dep_dt,
+                "arrival_datetime": arr_dt,
+                "duration_minutes": duration_min,
+                "price": round(price_total / max(len(offer.get("itineraries", [1])), 1), 2),
+                "currency": currency,
+                "booking_url": booking_url,
+                "status": "suggested",
+            })
+    return normalized
+
+
+def _normalize_amadeus_hotels(raw_hotels: list[dict], city: str,
+                               check_in: str, check_out: str) -> list[dict]:
+    """Convert Amadeus HotelOffers objects into the DB-compatible schema."""
+    from datetime import datetime as _dt
+    try:
+        nights = (_dt.strptime(check_out, "%Y-%m-%d") - _dt.strptime(check_in, "%Y-%m-%d")).days
+    except Exception:
+        nights = 1
+    nights = max(nights, 1)
+
+    normalized: list[dict] = []
+    for idx, hotel_data in enumerate(raw_hotels):
+        hotel_info = hotel_data.get("hotel", {})
+        offers = hotel_data.get("offers", [])
+        if not offers:
+            continue
+        best_offer = offers[0]  # first offer is typically cheapest
+
+        total_price = float(best_offer.get("price", {}).get("total", 0))
+        currency = best_offer.get("price", {}).get("currency", "USD")
+        price_per_night = round(total_price / nights, 2)
+
+        # Build address string from hotel info
+        name = hotel_info.get("name", f"Hotel in {city}")
+        lat = hotel_info.get("latitude")
+        lon = hotel_info.get("longitude")
+
+        # Room amenities from description
+        room_desc = (best_offer.get("room", {})
+                     .get("description", {})
+                     .get("text", ""))
+        amenities = []
+        if "wifi" in room_desc.lower() or "internet" in room_desc.lower():
+            amenities.append("wifi")
+        if best_offer.get("boardType"):
+            amenities.append(best_offer["boardType"].lower())
+
+        booking_url = (
+            f"https://www.google.com/travel/hotels?q="
+            f"{name.replace(' ', '+')}+{city.replace(' ', '+')}"
+        )
+
+        normalized.append({
+            "id": f"acc_{idx}",
+            "name": name,
+            "type": "hotel",
+            "address": f"{name}, {city}",
+            "city": city,
+            "check_in_date": best_offer.get("checkInDate", check_in),
+            "check_out_date": best_offer.get("checkOutDate", check_out),
+            "price_per_night": price_per_night,
+            "total_price": round(total_price, 2),
+            "currency": currency,
+            "rating": None,  # not available in Hotel Offers Search v3
+            "amenities": amenities,
+            "booking_url": booking_url,
+            "status": "suggested",
+            "_latitude": lat,
+            "_longitude": lon,
+        })
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -230,6 +386,9 @@ def search_flights_tool(
     dest_code = _airport_code(destination)
     results = _amadeus_flights_fn(origin_code, dest_code, departure_date, return_date, num_travelers)
     if results and "error" not in results[0]:
+        # Normalise if live Amadeus format
+        if not _is_mock_flight(results[0]):
+            results = _normalize_amadeus_flights(results, origin, destination)
         return json.dumps(results[:5], default=str)
     # Amadeus failed — fall back to mock data
     results = generate_mock_flights(origin, destination, departure_date, return_date or None, num_travelers)
@@ -255,6 +414,9 @@ def search_accommodations_tool(
     city_code = _city_iata(city)
     results = _amadeus_hotels_fn(city_code, check_in_date, check_out_date, num_guests, "hotel")
     if results and "error" not in results[0]:
+        # Normalise if live Amadeus format
+        if not _is_mock_accom(results[0]):
+            results = _normalize_amadeus_hotels(results, city, check_in_date, check_out_date)
         return json.dumps(results[:5], default=str)
     results = generate_mock_accommodations(city, check_in_date, check_out_date, num_guests)
     return json.dumps(results[:5], default=str)
@@ -353,17 +515,24 @@ def _build_agents():
         role="Itinerary Planner",
         goal=(
             "Create a detailed day-by-day itinerary with SPECIFIC named places for every "
-            "activity and meal. Never say 'find a local restaurant' — always name the exact "
-            "restaurant, cafe, or food stall. Include a Google Maps link for every location."
+            "activity and meal, arranged so that consecutive activities are GEOGRAPHICALLY "
+            "CLOSE to each other. Cluster activities by neighbourhood to minimise travel "
+            "time. Never say 'find a local restaurant' — always name the exact restaurant, "
+            "cafe, or food stall. Include a Google Maps link for every location."
         ),
         backstory=(
-            "You are an expert itinerary designer and local food critic who knows specific "
-            "restaurants, cafes, and street food stalls in every major city. You ALWAYS "
-            "recommend places by name (e.g. 'Ichiran Ramen Shibuya', 'Le Bouillon Chartier'). "
-            "You never use generic phrases like 'find a local restaurant' or 'try local food'. "
-            "You include a Google Maps URL for every single location in the itinerary. "
-            "You understand local currencies and always show prices in the local currency "
-            "with a USD equivalent."
+            "You are an expert itinerary designer, local food critic, and city logistics "
+            "planner who knows specific restaurants, cafes, and street food stalls in every "
+            "major city. Your TOP PRIORITY is geographic efficiency: you group activities "
+            "by neighbourhood so travellers walk between consecutive stops instead of "
+            "criss-crossing the city. You plan meals at restaurants NEAR the attractions "
+            "being visited that part of the day — breakfast near the hotel, lunch near the "
+            "morning's sights, dinner near the afternoon area or back near the hotel. "
+            "You ALWAYS recommend places by name (e.g. 'Ichiran Ramen Shibuya', "
+            "'Le Bouillon Chartier'). You never use generic phrases like 'find a local "
+            "restaurant' or 'try local food'. You include a Google Maps URL for every "
+            "single location in the itinerary. You understand local currencies and always "
+            "show prices in the local currency with a USD equivalent."
         ),
         tools=planner_tools,
         llm=_llm_name(),
@@ -506,17 +675,22 @@ Budget level: {budget}
 For each city from context, call Search Accommodations with:
   city=<city name>, check_in_date="{start}", check_out_date="{end}", num_guests={travelers}
 
-IMPORTANT: Your output MUST be a valid JSON object:
+IMPORTANT: After calling the tool, pick the BEST option for the budget level and include
+the hotel details in your output. Your output MUST be a valid JSON object:
 {{
-  "cities": ["<cities from context>"],
-  "check_in": "{start}",
-  "check_out": "{end}",
-  "num_guests": {travelers},
-  "budget_level": "{budget}"
+  "accommodations": [
+    {{
+      "city": "<city name>",
+      "hotel_name": "<name of chosen hotel>",
+      "address": "<hotel address or neighbourhood>",
+      "price_per_night": <number>,
+      "neighbourhood": "<district/area the hotel is in>"
+    }}
+  ]
 }}
 
 Return ONLY valid JSON.""",
-        expected_output="A JSON object with accommodation search parameters for each city.",
+        expected_output="A JSON object with accommodation details including hotel name, address, and neighbourhood for each city.",
         agent=accommodation_agent,
         context=[city_task, research_task],
         callback=_make_callback("AccommodationFinder", "Accommodation search complete"),
@@ -525,19 +699,40 @@ Return ONLY valid JSON.""",
     itinerary_task = Task(
         description=f"""Create a {duration}-day itinerary for {dest} ({start} to {end}).
 
-Context from previous agents: destination research, selected cities, flights, accommodations.
+Context from previous agents: destination research (including neighbourhood layout with
+attractions grouped by district), selected cities, flights, and accommodations (including
+hotel name and neighbourhood for each city).
 
 Travelers: {travelers} | Interests: {interests} | Diet: {dietary} | Budget: {budget}
 
+PLANNING APPROACH:
+- First, note the HOTEL NAME and NEIGHBOURHOOD from the accommodation context for each city.
+- Use the "neighbourhoods" data from city research to understand which attractions and
+  restaurants are in the SAME district.
+- Plan each day by picking ONE or TWO adjacent neighbourhoods and filling the day with
+  activities, meals, and sights from those areas.
+- Use the Get City Information tool for any city to see its neighbourhood breakdown.
+
 CRITICAL RULES:
-1. **Name every restaurant/cafe/food stall specifically** — NEVER say "find a local restaurant"
+1. **GEOGRAPHIC PROXIMITY** — This is the MOST IMPORTANT rule. Within each day, order
+   activities so consecutive stops are CLOSE TOGETHER. Cluster by neighbourhood:
+   - Start each day at or very near the accommodation.
+   - Pick breakfast within WALKING DISTANCE of the hotel (< 1 km).
+   - Group morning activities in the SAME neighbourhood. Pick lunch near those sights.
+   - Group afternoon activities in a SINGLE nearby area. Pick dinner near that area or
+     back near the hotel.
+   - NEVER jump across the city between consecutive items (e.g. don't go from a hotel
+     in Shinjuku to a café in Asakusa and back to Shibuya).
+   - Add the specific neighbourhood/district in each "location" field so proximity is
+     verifiable (e.g. "Café de Flore, Saint-Germain-des-Prés, Paris").
+2. **Name every restaurant/cafe/food stall specifically** — NEVER say "find a local restaurant"
    or "try local food". Always give the real name (e.g. "Ichiran Ramen Shibuya", "Pizzeria Da
    Michele", "Cafe de Flore").
-2. **Google Maps link for EVERY location** — format: https://www.google.com/maps/search/PLACE+NAME+CITY
-3. **Prices in local currency + USD** — e.g. "cost_local": "¥1500", "cost_usd": 10.
+3. **Google Maps link for EVERY location** — format: https://www.google.com/maps/search/PLACE+NAME+CITY
+4. **Prices in local currency + USD** — e.g. "cost_local": "¥1500", "cost_usd": 10.
    Use realistic local prices. A bowl of ramen in Tokyo is ~¥1000-1500 ($7-10), NOT $2000.
-4. Each day: 5-7 items including breakfast, lunch, dinner (all named specifically).
-5. Day 1 = arrival, last day = departure. Distribute cities evenly.
+5. Each day: 5-7 items including breakfast, lunch, dinner (all named specifically).
+6. Day 1 = arrival, last day = departure. Distribute cities evenly.
 
 Return a JSON array:
 [
@@ -615,23 +810,32 @@ def _parse_crew_result(
     origin = "New York"
     origin_code = _airport_code(origin)
     dest_code = _airport_code(cities[0])
-    flights = _amadeus_flights_fn(origin_code, dest_code, start, end, travelers)
-    if not flights or (isinstance(flights, list) and flights and "error" in flights[0]):
+    raw_flights = _amadeus_flights_fn(origin_code, dest_code, start, end, travelers)
+    if not raw_flights or (isinstance(raw_flights, list) and raw_flights and "error" in raw_flights[0]):
         flights = generate_mock_flights(origin, cities[0], start, end, travelers)
-    elif not _is_mock_flight(flights[0]):
-        # Amadeus format — fall back to mock for DB-compatible schema
-        flights = generate_mock_flights(origin, cities[0], start, end, travelers)
+    elif _is_mock_flight(raw_flights[0]):
+        # Already in DB-compatible format (mock data or pre-normalised)
+        flights = raw_flights
+    else:
+        # Live Amadeus format → normalise to DB schema
+        flights = _normalize_amadeus_flights(raw_flights, origin, cities[0])
+        if not flights:
+            flights = generate_mock_flights(origin, cities[0], start, end, travelers)
 
     # --- Accommodations via Amadeus (falls back to mock when no credentials) ---
     accommodations: list[dict] = []
     for city in cities:
         city_code = _city_iata(city)
-        hotels = _amadeus_hotels_fn(city_code, start, end, travelers, "hotel")
-        if not hotels or (isinstance(hotels, list) and hotels and "error" in hotels[0]):
+        raw_hotels = _amadeus_hotels_fn(city_code, start, end, travelers, "hotel")
+        if not raw_hotels or (isinstance(raw_hotels, list) and raw_hotels and "error" in raw_hotels[0]):
             hotels = generate_mock_accommodations(city, start, end, travelers)[:3]
-        elif not _is_mock_accom(hotels[0]):
-            # Amadeus format — fall back to mock for DB-compatible schema
-            hotels = generate_mock_accommodations(city, start, end, travelers)[:3]
+        elif _is_mock_accom(raw_hotels[0]):
+            hotels = raw_hotels[:3]
+        else:
+            # Live Amadeus format → normalise to DB schema
+            hotels = _normalize_amadeus_hotels(raw_hotels, city, start, end)[:3]
+            if not hotels:
+                hotels = generate_mock_accommodations(city, start, end, travelers)[:3]
         accommodations.extend(hotels[:3])
 
     # --- Parse itinerary ---
