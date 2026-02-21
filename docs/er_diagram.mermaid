@@ -1,0 +1,548 @@
+erDiagram
+    %% Core User Management
+    users ||--o{ user_sessions : has
+    users ||--o{ trips : creates
+    users ||--o{ notifications : receives
+    users ||--o{ user_activities : generates
+    users ||--o{ ai_feedback : provides
+
+    %% Destination Hierarchy
+    countries ||--o{ cities : contains
+    cities ||--o{ city_areas : has
+    cities ||--o{ attractions : contains
+
+    %% Trip Structure
+    trips ||--o{ trip_destinations : includes
+    trips ||--o{ trip_categories : has
+    trips ||--o{ trip_preferences : has
+    trips ||--o{ itineraries : generates
+    trips ||--o{ flights : contains
+    trips ||--o{ accommodations : contains
+    trips ||--o{ ai_planning_jobs : creates
+
+    trips ||--o| cities : primary_city
+    trips ||--o| countries : primary_country
+
+    %% Trip Destinations
+    trip_destinations ||--o| cities : city
+    trip_destinations ||--o| countries : country
+
+    %% Categories
+    categories ||--o{ categories : parent
+    categories ||--o{ trip_categories : selected_in
+    categories ||--o{ attractions : categorizes
+
+    trip_categories }o--|| trips : belongs_to
+    trip_categories }o--|| categories : references
+
+    %% Preferences
+    trips ||--o| trip_preferences : has
+
+    %% Itinerary Structure
+    itineraries ||--o{ itinerary_days : contains
+    itineraries }o--|| trips : belongs_to
+
+    itinerary_days ||--o{ itinerary_items : contains
+    itinerary_days }o--|| itineraries : belongs_to
+    itinerary_days ||--o| cities : location
+    itinerary_days ||--o| countries : location
+
+    itinerary_items }o--|| itinerary_days : belongs_to
+    itinerary_items ||--o| attractions : references
+    itinerary_items ||--o| itinerary_days : delayed_to
+
+    %% Attractions
+    attractions }o--|| cities : located_in
+    attractions }o--|| countries : located_in
+    attractions }o--|| city_areas : located_in_area
+    attractions ||--o{ attraction_reviews : has
+    attractions ||--o{ booking_links : has
+
+    %% Flights
+    flights }o--|| trips : belongs_to
+    flights ||--o| cities : departure_city
+    flights ||--o| cities : arrival_city
+
+    %% Accommodations
+    accommodations }o--|| trips : belongs_to
+    accommodations ||--o| cities : located_in
+    accommodations ||--o| city_areas : located_in_area
+
+    %% Booking Links (Polymorphic)
+    booking_links ||--o| attractions : links_to
+    booking_links ||--o| trips : links_to
+    booking_links ||--o| itinerary_items : links_to
+
+    %% AI System
+    ai_planning_jobs }o--|| trips : processes
+    ai_feedback }o--|| trips : rates
+    ai_feedback }o--|| itineraries : rates
+    ai_feedback }o--|| users : provided_by
+
+    %% Caching
+    flight_search_cache ||--o| cities : origin
+    flight_search_cache ||--o| cities : destination
+    accommodation_search_cache ||--o| cities : location
+
+    %% External API
+    external_api_logs ||--o| cities : queried_for
+    external_api_logs ||--o| countries : queried_for
+
+    %% Reference Tables
+    dietary_restrictions ||--o{ trip_preferences : selected_in
+    accessibility_needs ||--o{ trip_preferences : selected_in
+
+    %% Table Definitions
+    users {
+        uuid id PK
+        string email UK
+        string password_hash
+        string first_name
+        string last_name
+        string phone
+        string avatar_url
+        boolean is_active
+        boolean is_email_verified
+        string oauth_provider
+        string oauth_provider_id
+        jsonb preferences
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    user_sessions {
+        uuid id PK
+        uuid user_id FK
+        string token_hash
+        string refresh_token_hash
+        inet ip_address
+        text user_agent
+        timestamp expires_at
+        boolean is_revoked
+    }
+
+    countries {
+        uuid id PK
+        string iso_code UK
+        string name
+        geography location
+        geography bounds
+        string currency_code
+        string timezone
+        decimal popularity_score
+        int avg_daily_cost_low
+        int avg_daily_cost_mid
+        int avg_daily_cost_high
+        string google_places_id
+        tsvector search_vector
+    }
+
+    cities {
+        uuid id PK
+        uuid country_id FK
+        string name
+        string name_local
+        string[] aliases
+        geography location
+        string city_type
+        int population
+        decimal popularity_score
+        string iata_code
+        tsvector search_vector
+    }
+
+    city_areas {
+        uuid id PK
+        uuid city_id FK
+        string name
+        text description
+        geography bounds
+        geography center_location
+        string area_type
+        int safety_rating
+        int walkability_score
+    }
+
+    trips {
+        uuid id PK
+        uuid user_id FK
+        string title
+        text description
+        string trip_status
+        string primary_destination_type
+        uuid primary_city_id FK
+        uuid primary_country_id FK
+        date start_date
+        date end_date
+        int duration_days
+        int num_travelers
+        jsonb traveler_details
+        string budget_currency
+        int budget_total_max
+        string planning_status
+        uuid ai_planning_job_id
+        string trip_purpose
+        string travel_pace
+        boolean is_public
+        string share_token UK
+        decimal total_estimated_cost
+        decimal total_booked_cost
+    }
+
+    trip_destinations {
+        uuid id PK
+        uuid trip_id FK
+        string destination_type
+        uuid city_id FK
+        uuid country_id FK
+        int visit_order
+        date arrival_date
+        date departure_date
+        int nights
+        boolean is_primary_destination
+    }
+
+    categories {
+        uuid id PK
+        string name UK
+        string display_name
+        text description
+        uuid parent_category_id FK
+        int level
+        string icon_url
+        string color_hex
+        string pinterest_board_id
+        string pinterest_keyword
+    }
+
+    trip_categories {
+        uuid id PK
+        uuid trip_id FK
+        uuid category_id FK
+        int priority
+        jsonb pinterest_pins
+    }
+
+    dietary_restrictions {
+        uuid id PK
+        string name UK
+        string display_name
+        text description
+        string[] keywords
+    }
+
+    accessibility_needs {
+        uuid id PK
+        string name UK
+        string display_name
+        text description
+    }
+
+    trip_preferences {
+        uuid id PK
+        uuid trip_id FK
+        uuid[] dietary_restriction_ids
+        uuid[] accessibility_need_ids
+        text custom_restrictions
+        string[] accommodation_types
+        string[] accommodation_amenities
+        decimal min_accommodation_rating
+        string[] preferred_activity_times
+        boolean avoid_crowds
+        boolean prefer_offbeat
+        jsonb additional_preferences
+    }
+
+    itineraries {
+        uuid id PK
+        uuid trip_id FK
+        int version
+        boolean is_selected
+        string generated_by
+        string ai_model_version
+        text generation_prompt
+        int total_activities
+        decimal total_estimated_cost
+    }
+
+    itinerary_days {
+        uuid id PK
+        uuid itinerary_id FK
+        int day_number
+        date date
+        uuid city_id FK
+        uuid country_id FK
+        string title
+        text notes
+        int total_activities
+        decimal estimated_cost
+    }
+
+    itinerary_items {
+        uuid id PK
+        uuid itinerary_day_id FK
+        int item_order
+        time start_time
+        time end_time
+        int duration_minutes
+        string item_type
+        uuid attraction_id FK
+        string title
+        text description
+        text notes
+        string location_name
+        text location_address
+        geography location_coordinates
+        boolean booking_required
+        string booking_status
+        string booking_reference
+        text booking_url
+        text ticket_url
+        decimal cost_per_person
+        string cost_currency
+        boolean is_included_in_pass
+        string status
+        uuid delayed_to_day_id FK
+        text ai_recommendation_reason
+        decimal ai_confidence_score
+        int user_rating
+        text user_feedback
+        jsonb external_ids
+    }
+
+    attractions {
+        uuid id PK
+        uuid city_id FK
+        uuid country_id FK
+        uuid area_id FK
+        string name
+        string name_local
+        text description
+        string short_description
+        string attraction_type
+        uuid[] category_ids
+        text address
+        geography location
+        text directions
+        string phone
+        text website_url
+        string email
+        jsonb opening_hours
+        int typical_visit_duration
+        string crowdedness_level
+        string pricing_type
+        decimal price_adult
+        decimal price_child
+        decimal price_senior
+        decimal price_student
+        decimal avg_rating
+        int review_count
+        jsonb accessibility_features
+        string[] tags
+        string google_places_id
+        string tripadvisor_id
+        string getyourguide_id
+        string viator_id
+        text[] image_urls
+        text primary_image_url
+        tsvector search_vector
+        timestamp external_data_cached_at
+        jsonb external_data
+        boolean is_active
+        boolean is_verified
+    }
+
+    attraction_reviews {
+        uuid id PK
+        uuid attraction_id FK
+        string source
+        string external_review_id UK
+        string author_name
+        int rating
+        text review_text
+        date review_date
+        timestamp cached_at
+    }
+
+    flights {
+        uuid id PK
+        uuid trip_id FK
+        string flight_type
+        string departure_airport_code
+        string arrival_airport_code
+        uuid departure_city_id FK
+        uuid arrival_city_id FK
+        timestamp departure_datetime
+        timestamp arrival_datetime
+        int duration_minutes
+        string airline_code
+        string airline_name
+        string flight_number
+        string cabin_class
+        decimal price_per_person
+        decimal total_price
+        string price_currency
+        string booking_status
+        string booking_reference
+        string booking_platform
+        text booking_url
+        string pnr_code
+        jsonb passenger_details
+        boolean is_connecting_flight
+        string layover_airport_code
+        int layover_duration_minutes
+        string external_flight_id
+        jsonb external_data
+    }
+
+    flight_search_cache {
+        uuid id PK
+        string search_hash UK
+        string origin_airport
+        string destination_airport
+        date departure_date
+        date return_date
+        int passengers
+        string cabin_class
+        jsonb results
+        timestamp cached_at
+        timestamp expires_at
+        int hit_count
+    }
+
+    accommodations {
+        uuid id PK
+        uuid trip_id FK
+        uuid city_id FK
+        uuid area_id FK
+        string property_name
+        string property_type
+        text address
+        geography location
+        date check_in_date
+        date check_out_date
+        int nights
+        string room_type
+        int num_rooms
+        int num_guests
+        jsonb amenities
+        decimal price_per_night
+        decimal total_price
+        string price_currency
+        decimal taxes_fees
+        decimal star_rating
+        decimal guest_rating
+        int review_count
+        string booking_status
+        string booking_reference
+        string booking_platform
+        text booking_url
+        string confirmation_number
+        text cancellation_policy
+        date free_cancellation_until
+        string external_property_id
+        jsonb external_data
+        text[] image_urls
+    }
+
+    accommodation_search_cache {
+        uuid id PK
+        string search_hash UK
+        uuid city_id FK
+        date check_in_date
+        date check_out_date
+        int guests
+        int rooms
+        jsonb results
+        timestamp cached_at
+        timestamp expires_at
+        int hit_count
+    }
+
+    booking_links {
+        uuid id PK
+        string linkable_type
+        uuid linkable_id
+        string provider
+        string provider_display_name
+        text booking_url
+        text deeplink_url
+        decimal price_from
+        string price_currency
+        boolean is_available
+        text availability_note
+        string affiliate_code
+        timestamp cached_at
+        timestamp expires_at
+    }
+
+    ai_planning_jobs {
+        uuid id PK
+        uuid trip_id FK
+        string status
+        string worker_id
+        timestamp started_at
+        timestamp completed_at
+        jsonb input_params
+        jsonb result_data
+        text error_message
+        int retry_count
+        int max_retries
+        timestamp next_retry_at
+        int processing_duration_ms
+        int tokens_used
+        string model_version
+    }
+
+    ai_feedback {
+        uuid id PK
+        uuid trip_id FK
+        uuid itinerary_id FK
+        string feedback_type
+        int rating
+        text feedback_text
+        string rated_item_type
+        uuid rated_item_id
+        uuid user_id FK
+    }
+
+    notifications {
+        uuid id PK
+        uuid user_id FK
+        string type
+        string title
+        text message
+        text action_url
+        string action_type
+        boolean is_read
+        timestamp read_at
+        string[] sent_via
+        uuid related_trip_id FK
+        string related_entity_type
+        uuid related_entity_id
+    }
+
+    user_activities {
+        uuid id PK
+        uuid user_id FK
+        string activity_type
+        jsonb activity_data
+        inet ip_address
+        text user_agent
+        uuid session_id
+    }
+
+    external_api_logs {
+        uuid id PK
+        string api_provider
+        string api_endpoint
+        string request_method
+        jsonb request_params
+        int response_status
+        jsonb response_body
+        text error_message
+        timestamp request_started_at
+        timestamp request_completed_at
+        int duration_ms
+        int rate_limit_remaining
+    }

@@ -1,0 +1,3322 @@
+# Agentic Trip Planning Software - RESTful API Specification
+# OpenAPI 3.0.3 Specification
+
+openapi: 3.0.3
+info:
+  title: Agentic Trip Planning API
+  description: |
+    Comprehensive RESTful API for an AI-powered trip planning application.
+    Supports user management, trip creation, AI-powered itinerary generation,
+    flight/accommodation booking integration, and real-time planning updates.
+  version: 1.0.0
+  contact:
+    name: API Support
+    email: api@tripplanner.com
+
+servers:
+  - url: https://api.tripplanner.com/v1
+    description: Production server
+  - url: https://staging-api.tripplanner.com/v1
+    description: Staging server
+  - url: http://localhost:8080/v1
+    description: Local development
+
+# =============================================================================
+# SECURITY SCHEMES
+# =============================================================================
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token obtained from authentication endpoints
+
+  # ===========================================================================
+  # REUSABLE SCHEMAS
+  # ===========================================================================
+  schemas:
+    # -------------------------------------------------------------------------
+    # Common Schemas
+    # -------------------------------------------------------------------------
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: "VALIDATION_ERROR"
+            message:
+              type: string
+              example: "Invalid request parameters"
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                  message:
+                    type: string
+      required:
+        - error
+
+    Pagination:
+      type: object
+      properties:
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 20
+        total:
+          type: integer
+          example: 150
+        totalPages:
+          type: integer
+          example: 8
+        hasNext:
+          type: boolean
+          example: true
+        hasPrev:
+          type: boolean
+          example: false
+
+    # -------------------------------------------------------------------------
+    # User Schemas
+    # -------------------------------------------------------------------------
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "usr_12345678-1234-1234-1234-123456789abc"
+        email:
+          type: string
+          format: email
+          example: "user@example.com"
+        firstName:
+          type: string
+          example: "John"
+        lastName:
+          type: string
+          example: "Doe"
+        avatar:
+          type: string
+          format: uri
+          example: "https://cdn.tripplanner.com/avatars/usr_123.jpg"
+        phone:
+          type: string
+          example: "+1-555-123-4567"
+        dateOfBirth:
+          type: string
+          format: date
+          example: "1990-05-15"
+        nationality:
+          type: string
+          example: "US"
+        preferredCurrency:
+          type: string
+          example: "USD"
+        timezone:
+          type: string
+          example: "America/New_York"
+        preferences:
+          $ref: '#/components/schemas/UserPreferences'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - email
+        - firstName
+        - lastName
+
+    UserPreferences:
+      type: object
+      properties:
+        dietaryRestrictions:
+          type: array
+          items:
+            type: string
+            enum: [vegetarian, vegan, halal, kosher, gluten_free, dairy_free, nut_free]
+          example: ["vegetarian", "gluten_free"]
+        allergies:
+          type: array
+          items:
+            type: string
+          example: ["peanuts", "shellfish"]
+        accessibilityNeeds:
+          type: array
+          items:
+            type: string
+          example: ["wheelchair_accessible"]
+        travelStyle:
+          type: string
+          enum: [budget, mid_range, luxury, backpacker, family]
+          example: "mid_range"
+        pacePreference:
+          type: string
+          enum: [relaxed, moderate, fast_paced]
+          example: "moderate"
+        interestCategories:
+          type: array
+          items:
+            type: string
+            enum: [adventure, culture, food, nightlife, nature, shopping, history, art, wellness, sports]
+          example: ["culture", "food", "history"]
+        notificationPreferences:
+          type: object
+          properties:
+            email:
+              type: boolean
+              example: true
+            push:
+              type: boolean
+              example: true
+            sms:
+              type: boolean
+              example: false
+
+    # -------------------------------------------------------------------------
+    # Trip Schemas
+    # -------------------------------------------------------------------------
+    Trip:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "trp_87654321-4321-4321-4321-cba987654321"
+        userId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "Japan Adventure 2024"
+        description:
+          type: string
+          example: "Two-week exploration of Japan's cultural highlights"
+        status:
+          type: string
+          enum: [draft, planning, planned, active, completed, cancelled]
+          example: "planned"
+        destination:
+          $ref: '#/components/schemas/Destination'
+        dates:
+          $ref: '#/components/schemas/TripDates'
+        travelers:
+          type: integer
+          example: 2
+        budget:
+          $ref: '#/components/schemas/Budget'
+        preferences:
+          $ref: '#/components/schemas/TripPreferences'
+        cities:
+          type: array
+          items:
+            $ref: '#/components/schemas/CityPlan'
+        planningStatus:
+          $ref: '#/components/schemas/PlanningStatus'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - destination
+        - dates
+
+    Destination:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [city, country, region]
+          example: "country"
+        name:
+          type: string
+          example: "Japan"
+        code:
+          type: string
+          description: "ISO country code or IATA city code"
+          example: "JP"
+        coordinates:
+          $ref: '#/components/schemas/Coordinates'
+
+    Coordinates:
+      type: object
+      properties:
+        latitude:
+          type: number
+          example: 35.6762
+        longitude:
+          type: number
+          example: 139.6503
+
+    TripDates:
+      type: object
+      properties:
+        startDate:
+          type: string
+          format: date
+          example: "2024-04-01"
+        endDate:
+          type: string
+          format: date
+          example: "2024-04-15"
+        durationDays:
+          type: integer
+          example: 15
+        isFlexible:
+          type: boolean
+          example: false
+        flexibilityDays:
+          type: integer
+          example: 0
+
+    Budget:
+      type: object
+      properties:
+        total:
+          type: number
+          example: 5000
+        currency:
+          type: string
+          example: "USD"
+        allocations:
+          type: object
+          properties:
+            flights:
+              type: number
+              example: 1500
+            accommodation:
+              type: number
+              example: 2000
+            activities:
+              type: number
+              example: 800
+            food:
+              type: number
+              example: 500
+            transport:
+              type: number
+              example: 200
+
+    TripPreferences:
+      type: object
+      properties:
+        dietaryRestrictions:
+          type: array
+          items:
+            type: string
+          example: ["vegetarian"]
+        accessibilityNeeds:
+          type: array
+          items:
+            type: string
+          example: []
+        mustSeeAttractions:
+          type: array
+          items:
+            type: string
+          example: ["Mount Fuji", "Tokyo Tower"]
+        avoidPlaces:
+          type: array
+          items:
+            type: string
+          example: []
+        interestCategories:
+          type: array
+          items:
+            type: string
+          example: ["culture", "food", "history"]
+        accommodationPreferences:
+          type: object
+          properties:
+            types:
+              type: array
+              items:
+                type: string
+                enum: [hotel, hostel, apartment, resort, ryokan, guesthouse]
+              example: ["hotel", "ryokan"]
+            minRating:
+              type: number
+              example: 4.0
+            amenities:
+              type: array
+              items:
+                type: string
+              example: ["wifi", "breakfast", "pool"]
+
+    CityPlan:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "Tokyo"
+        country:
+          type: string
+          example: "Japan"
+        arrivalDate:
+          type: string
+          format: date
+          example: "2024-04-01"
+        departureDate:
+          type: string
+          format: date
+          example: "2024-04-05"
+        nights:
+          type: integer
+          example: 4
+        order:
+          type: integer
+          example: 1
+        accommodation:
+          $ref: '#/components/schemas/AccommodationSummary'
+        transportFromPrevious:
+          $ref: '#/components/schemas/TransportSummary'
+
+    AccommodationSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          example: "Park Hyatt Tokyo"
+        type:
+          type: string
+          example: "hotel"
+        checkIn:
+          type: string
+          format: date
+        checkOut:
+          type: string
+          format: date
+        bookingStatus:
+          type: string
+          enum: [not_booked, reserved, booked, cancelled]
+
+    TransportSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [flight, train, bus, car, ferry]
+        provider:
+          type: string
+        departureTime:
+          type: string
+          format: date-time
+        arrivalTime:
+          type: string
+          format: date-time
+        bookingStatus:
+          type: string
+          enum: [not_booked, reserved, booked, cancelled]
+
+    PlanningStatus:
+      type: object
+      properties:
+        stage:
+          type: string
+          enum: [not_started, analyzing, generating_itinerary, finding_flights, finding_hotels, finding_activities, completed, failed]
+          example: "completed"
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          example: 100
+        message:
+          type: string
+          example: "Planning completed successfully"
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        error:
+          type: string
+
+    # -------------------------------------------------------------------------
+    # Flight Schemas
+    # -------------------------------------------------------------------------
+    Flight:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tripId:
+          type: string
+        type:
+          type: string
+          enum: [outbound, return, internal]
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/FlightSegment'
+        price:
+          $ref: '#/components/schemas/Price'
+        bookingDetails:
+          $ref: '#/components/schemas/BookingDetails'
+        status:
+          type: string
+          enum: [suggested, selected, booked, cancelled]
+        createdAt:
+          type: string
+          format: date-time
+
+    FlightSegment:
+      type: object
+      properties:
+        id:
+          type: string
+        flightNumber:
+          type: string
+          example: "JL005"
+        airline:
+          $ref: '#/components/schemas/Airline'
+        departure:
+          $ref: '#/components/schemas/FlightEndpoint'
+        arrival:
+          $ref: '#/components/schemas/FlightEndpoint'
+        duration:
+          type: string
+          example: "PT12H30M"
+        aircraft:
+          type: string
+          example: "Boeing 777-300ER"
+        cabinClass:
+          type: string
+          enum: [economy, premium_economy, business, first]
+          example: "economy"
+        baggage:
+          $ref: '#/components/schemas/BaggageInfo'
+
+    FlightEndpoint:
+      type: object
+      properties:
+        airport:
+          $ref: '#/components/schemas/Airport'
+        datetime:
+          type: string
+          format: date-time
+          example: "2024-04-01T10:00:00+09:00"
+        terminal:
+          type: string
+          example: "3"
+        gate:
+          type: string
+          example: "45"
+
+    Airline:
+      type: object
+      properties:
+        code:
+          type: string
+          example: "JL"
+        name:
+          type: string
+          example: "Japan Airlines"
+        logo:
+          type: string
+          format: uri
+
+    Airport:
+      type: object
+      properties:
+        code:
+          type: string
+          example: "NRT"
+        name:
+          type: string
+          example: "Narita International Airport"
+        city:
+          type: string
+          example: "Tokyo"
+        country:
+          type: string
+          example: "Japan"
+        timezone:
+          type: string
+          example: "Asia/Tokyo"
+
+    BaggageInfo:
+      type: object
+      properties:
+        carryOn:
+          type: object
+          properties:
+            allowed:
+              type: boolean
+            weight:
+              type: string
+              example: "7kg"
+            dimensions:
+              type: string
+              example: "55x40x25cm"
+        checked:
+          type: object
+          properties:
+            allowed:
+              type: boolean
+            pieces:
+              type: integer
+              example: 2
+            weightPerPiece:
+              type: string
+              example: "23kg"
+
+    # -------------------------------------------------------------------------
+    # Accommodation Schemas
+    # -------------------------------------------------------------------------
+    Accommodation:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tripId:
+          type: string
+        cityId:
+          type: string
+        name:
+          type: string
+          example: "Park Hyatt Tokyo"
+        type:
+          type: string
+          enum: [hotel, hostel, apartment, resort, ryokan, guesthouse, villa]
+          example: "hotel"
+        description:
+          type: string
+        address:
+          $ref: '#/components/schemas/Address'
+        coordinates:
+          $ref: '#/components/schemas/Coordinates'
+        rating:
+          type: number
+          example: 4.8
+        reviewCount:
+          type: integer
+          example: 1250
+        images:
+          type: array
+          items:
+            type: string
+            format: uri
+        amenities:
+          type: array
+          items:
+            type: string
+          example: ["wifi", "pool", "spa", "gym", "restaurant"]
+        rooms:
+          type: array
+          items:
+            $ref: '#/components/schemas/Room'
+        checkIn:
+          type: string
+          format: date
+        checkOut:
+          type: string
+          format: date
+        price:
+          $ref: '#/components/schemas/Price'
+        bookingDetails:
+          $ref: '#/components/schemas/BookingDetails'
+        status:
+          type: string
+          enum: [suggested, selected, reserved, booked, cancelled]
+        policies:
+          $ref: '#/components/schemas/AccommodationPolicies'
+
+    Room:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          example: "Deluxe King Room"
+        description:
+          type: string
+        maxOccupancy:
+          type: integer
+          example: 2
+        bedType:
+          type: string
+          example: "King"
+        size:
+          type: string
+          example: "45 sqm"
+        amenities:
+          type: array
+          items:
+            type: string
+        images:
+          type: array
+          items:
+            type: string
+            format: uri
+        pricePerNight:
+          $ref: '#/components/schemas/Price'
+        cancellationPolicy:
+          type: string
+
+    AccommodationPolicies:
+      type: object
+      properties:
+        checkInTime:
+          type: string
+          example: "15:00"
+        checkOutTime:
+          type: string
+          example: "11:00"
+        cancellationDeadline:
+          type: string
+          format: date
+        cancellationPolicy:
+          type: string
+          example: "Free cancellation until 24 hours before check-in"
+        petPolicy:
+          type: string
+        childPolicy:
+          type: string
+
+    Address:
+      type: object
+      properties:
+        street:
+          type: string
+        city:
+          type: string
+        state:
+          type: string
+        postalCode:
+          type: string
+        country:
+          type: string
+
+    # -------------------------------------------------------------------------
+    # Itinerary Schemas
+    # -------------------------------------------------------------------------
+    Itinerary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tripId:
+          type: string
+        days:
+          type: array
+          items:
+            $ref: '#/components/schemas/DayItinerary'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    DayItinerary:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        dayNumber:
+          type: integer
+        cityId:
+          type: string
+        cityName:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ItineraryItem'
+        notes:
+          type: string
+
+    ItineraryItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [attraction, activity, restaurant, transport, accommodation, free_time, custom]
+        title:
+          type: string
+          example: "Visit Senso-ji Temple"
+        description:
+          type: string
+        startTime:
+          type: string
+          format: time
+          example: "09:00"
+        endTime:
+          type: string
+          format: time
+          example: "11:00"
+        duration:
+          type: string
+          example: "PT2H"
+        location:
+          $ref: '#/components/schemas/Location'
+        bookingInfo:
+          $ref: '#/components/schemas/BookingInfo'
+        cost:
+          $ref: '#/components/schemas/Price'
+        notes:
+          type: string
+        status:
+          type: string
+          enum: [planned, completed, skipped, delayed]
+        weather:
+          $ref: '#/components/schemas/WeatherForecast'
+        alternatives:
+          type: array
+          items:
+            $ref: '#/components/schemas/ItineraryItem'
+
+    Location:
+      type: object
+      properties:
+        name:
+          type: string
+        address:
+          type: string
+        coordinates:
+          $ref: '#/components/schemas/Coordinates'
+        placeId:
+          type: string
+          description: "Google Places ID or similar"
+
+    BookingInfo:
+      type: object
+      properties:
+        required:
+          type: boolean
+          example: false
+        booked:
+          type: boolean
+          example: false
+        bookingUrl:
+          type: string
+          format: uri
+        confirmationCode:
+          type: string
+        ticketUrl:
+          type: string
+          format: uri
+
+    WeatherForecast:
+      type: object
+      properties:
+        condition:
+          type: string
+          example: "Partly Cloudy"
+        temperature:
+          type: object
+          properties:
+            min:
+              type: number
+              example: 15
+            max:
+              type: number
+              example: 22
+            unit:
+              type: string
+              example: "C"
+        precipitation:
+          type: number
+          example: 10
+        humidity:
+          type: number
+          example: 65
+
+    # -------------------------------------------------------------------------
+    # Search Schemas
+    # -------------------------------------------------------------------------
+    FlightSearchRequest:
+      type: object
+      properties:
+        origin:
+          type: string
+          example: "JFK"
+        destination:
+          type: string
+          example: "NRT"
+        departureDate:
+          type: string
+          format: date
+        returnDate:
+          type: string
+          format: date
+        passengers:
+          type: object
+          properties:
+            adults:
+              type: integer
+              example: 2
+            children:
+              type: integer
+              example: 0
+            infants:
+              type: integer
+              example: 0
+        cabinClass:
+          type: string
+          enum: [economy, premium_economy, business, first]
+        maxPrice:
+          type: number
+        airlines:
+          type: array
+          items:
+            type: string
+        directOnly:
+          type: boolean
+          example: false
+
+    FlightSearchResults:
+      type: object
+      properties:
+        searchId:
+          type: string
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Flight'
+        filters:
+          type: object
+          properties:
+            airlines:
+              type: array
+              items:
+                $ref: '#/components/schemas/Airline'
+            priceRange:
+              type: object
+              properties:
+                min:
+                  type: number
+                max:
+                  type: number
+            stops:
+              type: array
+              items:
+                type: integer
+
+    HotelSearchRequest:
+      type: object
+      properties:
+        city:
+          type: string
+          example: "Tokyo"
+        checkIn:
+          type: string
+          format: date
+        checkOut:
+          type: string
+          format: date
+        guests:
+          type: object
+          properties:
+            adults:
+              type: integer
+              example: 2
+            children:
+              type: integer
+              example: 0
+            childrenAges:
+              type: array
+              items:
+                type: integer
+        rooms:
+          type: integer
+          example: 1
+        minRating:
+          type: number
+        maxPrice:
+          type: number
+        amenities:
+          type: array
+          items:
+            type: string
+        accommodationTypes:
+          type: array
+          items:
+            type: string
+
+    AttractionSearchRequest:
+      type: object
+      properties:
+        location:
+          type: string
+          example: "Tokyo, Japan"
+        categories:
+          type: array
+          items:
+            type: string
+            enum: [museum, landmark, park, entertainment, shopping, restaurant, tour, nature]
+        date:
+          type: string
+          format: date
+        radius:
+          type: integer
+          example: 5000
+        coordinates:
+          $ref: '#/components/schemas/Coordinates'
+        maxResults:
+          type: integer
+          example: 20
+
+    Attraction:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          example: "Senso-ji Temple"
+        description:
+          type: string
+        category:
+          type: string
+          example: "landmark"
+        location:
+          $ref: '#/components/schemas/Location'
+        rating:
+          type: number
+          example: 4.7
+        reviewCount:
+          type: integer
+          example: 15000
+        images:
+          type: array
+          items:
+            type: string
+            format: uri
+        openingHours:
+          type: array
+          items:
+            type: object
+            properties:
+              day:
+                type: string
+              open:
+                type: string
+              close:
+                type: string
+        ticketInfo:
+          type: object
+          properties:
+            price:
+              $ref: '#/components/schemas/Price'
+            freeEntry:
+              type: boolean
+            bookingRequired:
+              type: boolean
+            bookingUrl:
+              type: string
+        duration:
+          type: string
+          example: "PT2H"
+        bestTimeToVisit:
+          type: string
+
+    # -------------------------------------------------------------------------
+    # Common Utility Schemas
+    # -------------------------------------------------------------------------
+    Price:
+      type: object
+      properties:
+        amount:
+          type: number
+          example: 299.99
+        currency:
+          type: string
+          example: "USD"
+        breakdown:
+          type: object
+          properties:
+            base:
+              type: number
+            taxes:
+              type: number
+            fees:
+              type: number
+
+    BookingDetails:
+      type: object
+      properties:
+        provider:
+          type: string
+          example: "booking.com"
+        providerLogo:
+          type: string
+          format: uri
+        bookingUrl:
+          type: string
+          format: uri
+        confirmationCode:
+          type: string
+        bookingDate:
+          type: string
+          format: date-time
+        cancellationUrl:
+          type: string
+          format: uri
+        modifyUrl:
+          type: string
+          format: uri
+
+    # -------------------------------------------------------------------------
+    # WebSocket Message Schemas
+    # -------------------------------------------------------------------------
+    PlanningUpdateMessage:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [planning_update]
+        tripId:
+          type: string
+        data:
+          $ref: '#/components/schemas/PlanningStatus'
+
+    NotificationMessage:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [notification]
+        notification:
+          type: object
+          properties:
+            id:
+              type: string
+            title:
+              type: string
+            message:
+              type: string
+            severity:
+              type: string
+              enum: [info, warning, success, error]
+            timestamp:
+              type: string
+              format: date-time
+            actionUrl:
+              type: string
+
+# =============================================================================
+# PATHS
+# =============================================================================
+paths:
+  # ===========================================================================
+  # AUTHENTICATION & USER MANAGEMENT
+  # ===========================================================================
+  /auth/register:
+    post:
+      summary: Register a new user
+      description: Create a new user account with email and password
+      tags:
+        - Authentication
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 8
+                firstName:
+                  type: string
+                lastName:
+                  type: string
+              required:
+                - email
+                - password
+                - firstName
+                - lastName
+            example:
+              email: "john.doe@example.com"
+              password: "SecurePass123!"
+              firstName: "John"
+              lastName: "Doe"
+      responses:
+        '201':
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/User'
+                  tokens:
+                    type: object
+                    properties:
+                      accessToken:
+                        type: string
+                      refreshToken:
+                        type: string
+                      expiresIn:
+                        type: integer
+              example:
+                user:
+                  id: "usr_12345678-1234-1234-1234-123456789abc"
+                  email: "john.doe@example.com"
+                  firstName: "John"
+                  lastName: "Doe"
+                  createdAt: "2024-01-15T10:30:00Z"
+                tokens:
+                  accessToken: "eyJhbGciOiJIUzI1NiIs..."
+                  refreshToken: "eyJhbGciOiJIUzI1NiIs..."
+                  expiresIn: 3600
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Email already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/login:
+    post:
+      summary: User login
+      description: Authenticate user and return access tokens
+      tags:
+        - Authentication
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+              required:
+                - email
+                - password
+            example:
+              email: "john.doe@example.com"
+              password: "SecurePass123!"
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/User'
+                  tokens:
+                    type: object
+                    properties:
+                      accessToken:
+                        type: string
+                      refreshToken:
+                        type: string
+                      expiresIn:
+                        type: integer
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/refresh:
+    post:
+      summary: Refresh access token
+      description: Get a new access token using refresh token
+      tags:
+        - Authentication
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken:
+                  type: string
+              required:
+                - refreshToken
+      responses:
+        '200':
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accessToken:
+                    type: string
+                  expiresIn:
+                    type: integer
+
+  /auth/logout:
+    post:
+      summary: User logout
+      description: Invalidate current access token
+      tags:
+        - Authentication
+      responses:
+        '204':
+          description: Logout successful
+
+  /auth/forgot-password:
+    post:
+      summary: Request password reset
+      description: Send password reset email to user
+      tags:
+        - Authentication
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+              required:
+                - email
+      responses:
+        '200':
+          description: Password reset email sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Password reset instructions sent to your email"
+
+  /auth/reset-password:
+    post:
+      summary: Reset password
+      description: Reset password using token from email
+      tags:
+        - Authentication
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token:
+                  type: string
+                newPassword:
+                  type: string
+                  minLength: 8
+              required:
+                - token
+                - newPassword
+      responses:
+        '200':
+          description: Password reset successful
+
+  /auth/oauth/{provider}:
+    get:
+      summary: OAuth login initiation
+      description: Redirect to OAuth provider (Google, Facebook, Apple)
+      tags:
+        - Authentication
+      security: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [google, facebook, apple]
+      responses:
+        '302':
+          description: Redirect to OAuth provider
+
+  /auth/oauth/{provider}/callback:
+    get:
+      summary: OAuth callback
+      description: Handle OAuth provider callback
+      tags:
+        - Authentication
+      security: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OAuth login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/User'
+                  tokens:
+                    type: object
+
+  # ===========================================================================
+  # USER PROFILE
+  # ===========================================================================
+  /users/me:
+    get:
+      summary: Get current user profile
+      description: Retrieve the authenticated user's profile
+      tags:
+        - Users
+      responses:
+        '200':
+          description: User profile retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+
+    put:
+      summary: Update user profile
+      description: Update the authenticated user's profile information
+      tags:
+        - Users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                firstName:
+                  type: string
+                lastName:
+                  type: string
+                phone:
+                  type: string
+                dateOfBirth:
+                  type: string
+                  format: date
+                nationality:
+                  type: string
+                preferredCurrency:
+                  type: string
+                timezone:
+                  type: string
+                avatar:
+                  type: string
+                  format: uri
+            example:
+              firstName: "Johnny"
+              phone: "+1-555-987-6543"
+              preferredCurrency: "EUR"
+      responses:
+        '200':
+          description: Profile updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+
+  /users/me/preferences:
+    get:
+      summary: Get user preferences
+      description: Retrieve user's travel preferences
+      tags:
+        - Users
+      responses:
+        '200':
+          description: Preferences retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPreferences'
+
+    put:
+      summary: Update user preferences
+      description: Update user's travel preferences
+      tags:
+        - Users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserPreferences'
+            example:
+              dietaryRestrictions: ["vegetarian"]
+              allergies: ["peanuts"]
+              travelStyle: "mid_range"
+              interestCategories: ["culture", "food", "history"]
+      responses:
+        '200':
+          description: Preferences updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPreferences'
+
+  /users/me/password:
+    put:
+      summary: Change password
+      description: Change user's password
+      tags:
+        - Users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                currentPassword:
+                  type: string
+                newPassword:
+                  type: string
+                  minLength: 8
+              required:
+                - currentPassword
+                - newPassword
+      responses:
+        '200':
+          description: Password changed successfully
+        '401':
+          description: Current password incorrect
+
+  /users/me/account:
+    delete:
+      summary: Delete account
+      description: Permanently delete user account and all associated data
+      tags:
+        - Users
+      responses:
+        '204':
+          description: Account deleted successfully
+
+  # ===========================================================================
+  # TRIP MANAGEMENT
+  # ===========================================================================
+  /trips:
+    get:
+      summary: List user trips
+      description: Get all trips for the authenticated user
+      tags:
+        - Trips
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [draft, planning, planned, active, completed, cancelled]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+      responses:
+        '200':
+          description: List of trips retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Trip'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+
+    post:
+      summary: Create a new trip
+      description: Create a new trip with basic information
+      tags:
+        - Trips
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                destination:
+                  $ref: '#/components/schemas/Destination'
+                dates:
+                  $ref: '#/components/schemas/TripDates'
+                travelers:
+                  type: integer
+                  default: 1
+                budget:
+                  $ref: '#/components/schemas/Budget'
+                preferences:
+                  $ref: '#/components/schemas/TripPreferences'
+              required:
+                - name
+                - destination
+                - dates
+            example:
+              name: "Japan Adventure 2024"
+              description: "Two-week exploration of Japan's cultural highlights"
+              destination:
+                type: "country"
+                name: "Japan"
+                code: "JP"
+              dates:
+                startDate: "2024-04-01"
+                endDate: "2024-04-15"
+                isFlexible: false
+              travelers: 2
+              budget:
+                total: 5000
+                currency: "USD"
+              preferences:
+                dietaryRestrictions: ["vegetarian"]
+                interestCategories: ["culture", "food", "history"]
+      responses:
+        '201':
+          description: Trip created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Trip'
+
+  /trips/{tripId}:
+    parameters:
+      - name: tripId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      summary: Get trip details
+      description: Retrieve detailed information about a specific trip
+      tags:
+        - Trips
+      responses:
+        '200':
+          description: Trip details retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Trip'
+        '404':
+          description: Trip not found
+
+    put:
+      summary: Update trip
+      description: Update trip information
+      tags:
+        - Trips
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                dates:
+                  $ref: '#/components/schemas/TripDates'
+                travelers:
+                  type: integer
+                budget:
+                  $ref: '#/components/schemas/Budget'
+                preferences:
+                  $ref: '#/components/schemas/TripPreferences'
+      responses:
+        '200':
+          description: Trip updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Trip'
+
+    delete:
+      summary: Delete trip
+      description: Delete a trip and all associated data
+      tags:
+        - Trips
+      responses:
+        '204':
+          description: Trip deleted successfully
+
+  /trips/{tripId}/duplicate:
+    post:
+      summary: Duplicate trip
+      description: Create a copy of an existing trip
+      tags:
+        - Trips
+      parameters:
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                newDates:
+                  $ref: '#/components/schemas/TripDates'
+      responses:
+        '201':
+          description: Trip duplicated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Trip'
+
+  # ===========================================================================
+  # TRIP PLANNING WORKFLOW
+  # ===========================================================================
+  /trips/{tripId}/planning:
+    parameters:
+      - name: tripId
+        in: path
+        required: true
+        schema:
+          type: string
+
+    post:
+      summary: Start trip planning
+      description: Initiate AI-powered trip planning process
+      tags:
+        - Planning
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                options:
+                  type: object
+                  properties:
+                    includeFlights:
+                      type: boolean
+                      default: true
+                    includeAccommodation:
+                      type: boolean
+                      default: true
+                    includeActivities:
+                      type: boolean
+                      default: true
+                    optimizeFor:
+                      type: string
+                      enum: [cost, time, experience, balanced]
+                      default: "balanced"
+                    priorityCategories:
+                      type: array
+                      items:
+                        type: string
+              example:
+                options:
+                  includeFlights: true
+                  includeAccommodation: true
+                  includeActivities: true
+                  optimizeFor: "balanced"
+                  priorityCategories: ["culture", "food"]
+      responses:
+        '202':
+          description: Planning process initiated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  planningId:
+                    type: string
+                  status:
+                    type: string
+                    example: "started"
+                  message:
+                    type: string
+                    example: "Trip planning initiated. Connect to WebSocket for real-time updates."
+
+    get:
+      summary: Get planning status
+      description: Retrieve current planning status and progress
+      tags:
+        - Planning
+      responses:
+        '200':
+          description: Planning status retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanningStatus'
+
+  /trips/{tripId}/planning/cancel:
+    post:
+      summary: Cancel planning
+      description: Cancel an ongoing planning process
+      tags:
+        - Planning
+      parameters:
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Planning cancelled
+
+  /trips/{tripId}/planning/regenerate:
+    post:
+      summary: Regenerate planning
+      description: Regenerate trip plan with modified preferences
+      tags:
+        - Planning
+      parameters:
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                regenerateOptions:
+                  type: object
+                  properties:
+                    cities:
+                      type: boolean
+                    flights:
+                      type: boolean
+                    accommodation:
+                      type: boolean
+                    itinerary:
+                      type: boolean
+                preferences:
+                  $ref: '#/components/schemas/TripPreferences'
+      responses:
+        '202':
+          description: Regeneration initiated
+
+  # ===========================================================================
+  # CITY MANAGEMENT (for country-level trips)
+  # ===========================================================================
+  /trips/{tripId}/cities:
+    parameters:
+      - name: tripId
+        in: path
+        required: true
+        schema:
+          type: string
+
+    get:
+      summary: Get trip cities
+      description: Get all cities in the trip itinerary
+      tags:
+        - Cities
+      responses:
+        '200':
+          description: Cities retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CityPlan'
+
+    post:
+      summary: Add city to trip
+      description: Add a new city to the trip itinerary
+      tags:
+        - Cities
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                country:
+                  type: string
+                arrivalDate:
+                  type: string
+                  format: date
+                departureDate:
+                  type: string
+                  format: date
+                order:
+                  type: integer
+              required:
+                - name
+                - arrivalDate
+                - departureDate
+            example:
+              name: "Kyoto"
+              country: "Japan"
+              arrivalDate: "2024-04-05"
+              departureDate: "2024-04-08"
+              order: 2
+      responses:
+        '201':
+          description: City added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CityPlan'
+
+  /trips/{tripId}/cities/{cityId}:
+    parameters:
+      - name: tripId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: cityId
+        in: path
+        required: true
+        schema:
+          type: string
+
+    put:
+      summary: Update city
+      description: Update city details in the trip
+      tags:
+        - Cities
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                arrivalDate:
+                  type: string
+                  format: date
+                departureDate:
+                  type: string
+                  format: date
+                order:
+                  type: integer
+      responses:
+        '200':
+          description: City updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CityPlan'
+
+    delete:
+      summary: Remove city
+      description: Remove a city from the trip itinerary
+      tags:
+        - Cities
+      responses:
+        '204':
+          description: City removed successfully
+
+  /trips/{tripId}/cities/reorder:
+    put:
+      summary: Reorder cities
+      description: Change the order of cities in the itinerary
+      tags:
+        - Cities
+      parameters:
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                cityOrder:
+                  type: array
+                  items:
+                    type: string
+                  description: "Array of city IDs in desired order"
+              example:
+                cityOrder: ["city_1", "city_3", "city_2"]
+      responses:
+        '200':
+          description: Cities reordered successfully
+
+  # ===========================================================================
+  # FLIGHT MANAGEMENT
+  # ===========================================================================
+  /trips/{tripId}/flights:
+    parameters:
+      - name: tripId
+        in: path
+        required: true
+        schema:
+          type: string
+
+    get:
+      summary: Get trip flights
+      description: Get all flights for the trip
+      tags:
+        - Flights
+      parameters:
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [outbound, return, internal, all]
+            default: all
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [suggested, selected, booked, cancelled]
+      responses:
+        '200':
+          description: Flights retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Flight'
+
+    post:
+      summary: Add flight to trip
+      description: Manually add a flight to the trip
+      tags:
+        - Flights
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Flight'
+      responses:
+        '201':
+          description: Flight added successfully
+
+  /trips/{tripId}/flights/{flightId}:
+    parameters:
+      - name: tripId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: flightId
+        in: path
+        required: true
+        schema:
+          type: string
+
+    get:
+      summary: Get flight details
+      description: Get detailed information about a specific flight
+      tags:
+        - Flights
+      responses:
+        '200':
+          description: Flight details retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flight'
+
+    put:
+      summary: Update flight
+      description: Update flight information
+      tags:
+        - Flights
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [suggested, selected, booked, cancelled]
+                bookingDetails:
+                  $ref: '#/components/schemas/BookingDetails'
+      responses:
+        '200':
+          description: Flight updated successfully
+
+    delete:
+      summary: Remove flight
+      description: Remove a flight from the trip
+      tags:
+        - Flights
+      responses:
+        '204':
+          description: Flight removed successfully
+
+  /trips/{tripId}/flights/{flightId}/select:
+    post:
+      summary: Select flight
+      description: Select a suggested flight for booking
+      tags:
+        - Flights
+      parameters:
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: flightId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Flight selected
+
+  /trips/{tripId}/flights/{flightId}/book:
+    post:
+      summary: Book flight
+      description: Mark flight as booked with booking details
+      tags:
+        - Flights
+      parameters:
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: flightId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                bookingDetails:
+                  $ref: '#/components/schemas/BookingDetails'
+      responses:
+        '200':
+          description: Flight marked as booked
+
+  # ===========================================================================
+  # ACCOMMODATION MANAGEMENT
+  # ===========================================================================
+  /trips/{tripId}/accommodations:
+    parameters:
+      - name: tripId
+        in: path
+        required: true
+        schema:
+          type: string
+
+    get:
+      summary: Get trip accommodations
+      description: Get all accommodations for the trip
+      tags:
+        - Accommodations
+      parameters:
+        - name: cityId
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [suggested, selected, reserved, booked, cancelled]
+      responses:
+        '200':
+          description: Accommodations retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Accommodation'
+
+    post:
+      summary: Add accommodation
+      description: Manually add an accommodation to the trip
+      tags:
+        - Accommodations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Accommodation'
+      responses:
+        '201':
+          description: Accommodation added successfully
+
+  /trips/{tripId}/accommodations/{accommodationId}:
+    parameters:
+      - name: tripId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: accommodationId
+        in: path
+        required: true
+        schema:
+          type: string
+
+    get:
+      summary: Get accommodation details
+      description: Get detailed information about a specific accommodation
+      tags:
+        - Accommodations
+      responses:
+        '200':
+          description: Accommodation details retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Accommodation'
+
+    put:
+      summary: Update accommodation
+      description: Update accommodation information
+      tags:
+        - Accommodations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                bookingDetails:
+                  $ref: '#/components/schemas/BookingDetails'
+                selectedRoom:
+                  type: string
+      responses:
+        '200':
+          description: Accommodation updated successfully
+
+    delete:
+      summary: Remove accommodation
+      description: Remove an accommodation from the trip
+      tags:
+        - Accommodations
+      responses:
+        '204':
+          description: Accommodation removed successfully
+
+  /trips/{tripId}/accommodations/{accommodationId}/select:
+    post:
+      summary: Select accommodation
+      description: Select a suggested accommodation
+      tags:
+        - Accommodations
+      parameters:
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: accommodationId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                roomId:
+                  type: string
+      responses:
+        '200':
+          description: Accommodation selected
+
+  /trips/{tripId}/accommodations/{accommodationId}/book:
+    post:
+      summary: Book accommodation
+      description: Mark accommodation as booked
+      tags:
+        - Accommodations
+      parameters:
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: accommodationId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                bookingDetails:
+                  $ref: '#/components/schemas/BookingDetails'
+      responses:
+        '200':
+          description: Accommodation marked as booked
+
+  # ===========================================================================
+  # ITINERARY MANAGEMENT
+  # ===========================================================================
+  /trips/{tripId}/itinerary:
+    parameters:
+      - name: tripId
+        in: path
+        required: true
+        schema:
+          type: string
+
+    get:
+      summary: Get full itinerary
+      description: Get the complete trip itinerary
+      tags:
+        - Itinerary
+      responses:
+        '200':
+          description: Itinerary retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Itinerary'
+
+    put:
+      summary: Update full itinerary
+      description: Replace the entire trip itinerary
+      tags:
+        - Itinerary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Itinerary'
+      responses:
+        '200':
+          description: Itinerary updated successfully
+
+  /trips/{tripId}/itinerary/days/{date}:
+    parameters:
+      - name: tripId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: date
+        in: path
+        required: true
+        schema:
+          type: string
+          format: date
+
+    get:
+      summary: Get day itinerary
+      description: Get itinerary for a specific day
+      tags:
+        - Itinerary
+      responses:
+        '200':
+          description: Day itinerary retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DayItinerary'
+
+    put:
+      summary: Update day itinerary
+      description: Update itinerary for a specific day
+      tags:
+        - Itinerary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DayItinerary'
+      responses:
+        '200':
+          description: Day itinerary updated
+
+  /trips/{tripId}/itinerary/items:
+    parameters:
+      - name: tripId
+        in: path
+        required: true
+        schema:
+          type: string
+
+    post:
+      summary: Add itinerary item
+      description: Add a new item to the itinerary
+      tags:
+        - Itinerary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                date:
+                  type: string
+                  format: date
+                item:
+                  $ref: '#/components/schemas/ItineraryItem'
+            example:
+              date: "2024-04-01"
+              item:
+                type: "attraction"
+                title: "Tokyo National Museum"
+                description: "Japan's oldest and largest museum"
+                startTime: "10:00"
+                endTime: "13:00"
+                location:
+                  name: "Tokyo National Museum"
+                  address: "13-9 Ueno Park, Taito City, Tokyo"
+      responses:
+        '201':
+          description: Item added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItineraryItem'
+
+  /trips/{tripId}/itinerary/items/{itemId}:
+    parameters:
+      - name: tripId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: itemId
+        in: path
+        required: true
+        schema:
+          type: string
+
+    put:
+      summary: Update itinerary item
+      description: Update an existing itinerary item
+      tags:
+        - Itinerary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItineraryItem'
+      responses:
+        '200':
+          description: Item updated successfully
+
+    delete:
+      summary: Remove itinerary item
+      description: Remove an item from the itinerary
+      tags:
+        - Itinerary
+      responses:
+        '204':
+          description: Item removed successfully
+
+  /trips/{tripId}/itinerary/items/{itemId}/delay:
+    post:
+      summary: Delay itinerary item
+      description: Move an itinerary item to a different day
+      tags:
+        - Itinerary
+      parameters:
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                targetDate:
+                  type: string
+                  format: date
+                  description: "New date for the item"
+                targetTime:
+                  type: string
+                  format: time
+                  description: "New time for the item (optional)"
+                insertAfter:
+                  type: string
+                  description: "Item ID to insert after (optional)"
+              required:
+                - targetDate
+            example:
+              targetDate: "2024-04-03"
+              targetTime: "14:00"
+      responses:
+        '200':
+          description: Item delayed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  originalItem:
+                    $ref: '#/components/schemas/ItineraryItem'
+                  newItem:
+                    $ref: '#/components/schemas/ItineraryItem'
+                  affectedItems:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ItineraryItem'
+
+  /trips/{tripId}/itinerary/items/{itemId}/complete:
+    post:
+      summary: Mark item as completed
+      description: Mark an itinerary item as completed
+      tags:
+        - Itinerary
+      parameters:
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes:
+                  type: string
+                rating:
+                  type: integer
+                  minimum: 1
+                  maximum: 5
+      responses:
+        '200':
+          description: Item marked as completed
+
+  /trips/{tripId}/itinerary/reorder:
+    put:
+      summary: Reorder itinerary items
+      description: Change the order of items within a day
+      tags:
+        - Itinerary
+      parameters:
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                date:
+                  type: string
+                  format: date
+                itemOrder:
+                  type: array
+                  items:
+                    type: string
+                  description: "Array of item IDs in desired order"
+              required:
+                - date
+                - itemOrder
+            example:
+              date: "2024-04-01"
+              itemOrder: ["item_1", "item_3", "item_2"]
+      responses:
+        '200':
+          description: Items reordered successfully
+
+  /trips/{tripId}/itinerary/optimize:
+    post:
+      summary: Optimize itinerary
+      description: Use AI to optimize the itinerary for time/distance
+      tags:
+        - Itinerary
+      parameters:
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                optimizeFor:
+                  type: string
+                  enum: [distance, time, cost]
+                  default: "distance"
+                days:
+                  type: array
+                  items:
+                    type: string
+                    format: date
+                  description: "Specific days to optimize (optional)"
+      responses:
+        '200':
+          description: Itinerary optimized
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  originalItinerary:
+                    $ref: '#/components/schemas/Itinerary'
+                  optimizedItinerary:
+                    $ref: '#/components/schemas/Itinerary'
+                  changes:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        type:
+                          type: string
+                        description:
+                          type: string
+
+  # ===========================================================================
+  # EXTERNAL SEARCH APIs
+  # ===========================================================================
+  /search/flights:
+    get:
+      summary: Search flights
+      description: Search for flights using external APIs
+      tags:
+        - Search
+      parameters:
+        - name: origin
+          in: query
+          required: true
+          schema:
+            type: string
+          example: "JFK"
+        - name: destination
+          in: query
+          required: true
+          schema:
+            type: string
+          example: "NRT"
+        - name: departureDate
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: returnDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: adults
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: children
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: cabinClass
+          in: query
+          schema:
+            type: string
+            enum: [economy, premium_economy, business, first]
+            default: economy
+        - name: maxPrice
+          in: query
+          schema:
+            type: number
+      responses:
+        '200':
+          description: Flight search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FlightSearchResults'
+
+    post:
+      summary: Advanced flight search
+      description: Advanced flight search with more options
+      tags:
+        - Search
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FlightSearchRequest'
+      responses:
+        '200':
+          description: Flight search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FlightSearchResults'
+
+  /search/hotels:
+    get:
+      summary: Search hotels
+      description: Search for hotels using external APIs
+      tags:
+        - Search
+      parameters:
+        - name: city
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: checkIn
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: checkOut
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: adults
+          in: query
+          schema:
+            type: integer
+            default: 2
+        - name: rooms
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: minRating
+          in: query
+          schema:
+            type: number
+      responses:
+        '200':
+          description: Hotel search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  searchId:
+                    type: string
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Accommodation'
+
+    post:
+      summary: Advanced hotel search
+      description: Advanced hotel search with filters
+      tags:
+        - Search
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HotelSearchRequest'
+      responses:
+        '200':
+          description: Hotel search results
+
+  /search/attractions:
+    get:
+      summary: Search attractions
+      description: Search for attractions and activities
+      tags:
+        - Search
+      parameters:
+        - name: location
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: date
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: radius
+          in: query
+          schema:
+            type: integer
+            default: 5000
+        - name: lat
+          in: query
+          schema:
+            type: number
+        - name: lng
+          in: query
+          schema:
+            type: number
+      responses:
+        '200':
+          description: Attraction search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  searchId:
+                    type: string
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Attraction'
+
+    post:
+      summary: Advanced attraction search
+      description: Advanced attraction search with filters
+      tags:
+        - Search
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttractionSearchRequest'
+      responses:
+        '200':
+          description: Attraction search results
+
+  /search/autocomplete:
+    get:
+      summary: Location autocomplete
+      description: Get location suggestions for search
+      tags:
+        - Search
+      parameters:
+        - name: query
+          in: query
+          required: true
+          schema:
+            type: string
+          example: "tok"
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [city, country, airport, landmark, all]
+            default: all
+      responses:
+        '200':
+          description: Autocomplete suggestions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  suggestions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        type:
+                          type: string
+                        name:
+                          type: string
+                        subtitle:
+                          type: string
+                        code:
+                          type: string
+
+  # ===========================================================================
+  # PINTEREST INTEGRATION
+  # ===========================================================================
+  /users/me/pinterest/connect:
+    post:
+      summary: Connect Pinterest account
+      description: Link user's Pinterest account for interest extraction
+      tags:
+        - Pinterest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                accessToken:
+                  type: string
+      responses:
+        '200':
+          description: Pinterest account connected
+
+  /users/me/pinterest/boards:
+    get:
+      summary: Get Pinterest boards
+      description: Get user's Pinterest boards
+      tags:
+        - Pinterest
+      responses:
+        '200':
+          description: Boards retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  boards:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        name:
+                          type: string
+                        imageCount:
+                          type: integer
+
+  /users/me/pinterest/interests:
+    get:
+      summary: Extract interests from Pinterest
+      description: Analyze Pinterest boards and extract travel interests
+      tags:
+        - Pinterest
+      parameters:
+        - name: boardIds
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        '200':
+          description: Extracted interests
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  categories:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        category:
+                          type: string
+                        confidence:
+                          type: number
+                        sampleImages:
+                          type: array
+                          items:
+                            type: string
+
+  /trips/{tripId}/pinterest/import:
+    post:
+      summary: Import from Pinterest
+      description: Import pins as trip ideas/attractions
+      tags:
+        - Pinterest
+      parameters:
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                boardId:
+                  type: string
+                pinIds:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Pins imported successfully
+
+  # ===========================================================================
+  # NOTIFICATIONS
+  # ===========================================================================
+  /notifications:
+    get:
+      summary: Get notifications
+      description: Get user's notifications
+      tags:
+        - Notifications
+      parameters:
+        - name: unreadOnly
+          in: query
+          schema:
+            type: boolean
+            default: false
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Notifications retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        title:
+                          type: string
+                        message:
+                          type: string
+                        severity:
+                          type: string
+                        read:
+                          type: boolean
+                        createdAt:
+                          type: string
+                          format: date-time
+                        actionUrl:
+                          type: string
+
+  /notifications/{notificationId}/read:
+    post:
+      summary: Mark notification as read
+      description: Mark a specific notification as read
+      tags:
+        - Notifications
+      parameters:
+        - name: notificationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Notification marked as read
+
+  /notifications/read-all:
+    post:
+      summary: Mark all notifications as read
+      description: Mark all notifications as read
+      tags:
+        - Notifications
+      responses:
+        '200':
+          description: All notifications marked as read
+
+  # ===========================================================================
+  # WEBSOCKET ENDPOINTS (Documented as REST for OpenAPI compatibility)
+  # ===========================================================================
+  /ws/connect:
+    get:
+      summary: WebSocket connection endpoint
+      description: |
+        Connect to WebSocket for real-time updates.
+        Actual connection: wss://api.tripplanner.com/v1/ws/connect?token={jwt_token}
+      tags:
+        - WebSocket
+      security:
+        - BearerAuth: []
+      responses:
+        '101':
+          description: WebSocket connection established
+
+  /sse/subscribe:
+    get:
+      summary: SSE subscription endpoint
+      description: |
+        Subscribe to Server-Sent Events for real-time updates.
+        Connection: EventSource to /sse/subscribe?token={jwt_token}
+      tags:
+        - SSE
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: SSE stream established
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+# =============================================================================
+# EXTERNAL API INTEGRATION PATTERNS
+# =============================================================================
+# Documented as comments since these are internal integration patterns
+
+# FLIGHT SEARCH APIs
+# ------------------
+# Primary: Amadeus API (https://developers.amadeus.com/)
+# Fallback: Skyscanner API, Kayak API
+#
+# Integration Pattern:
+# 1. Client requests flight search via /search/flights
+# 2. Backend calls Amadeus Flight Offers Search API
+# 3. Results cached in Redis for 15 minutes
+# 4. Response normalized to Flight schema
+# 5. Deep links generated for booking
+#
+# Key Endpoints:
+# - GET /v2/shopping/flight-offers (Amadeus)
+# - Response cached with key: flight:search:{hash}
+#
+# Rate Limiting:
+# - 100 requests/minute per API key
+# - Queue requests if limit exceeded
+
+# HOTEL BOOKING APIs
+# ------------------
+# Primary: Booking.com Affiliate API
+# Secondary: Airbnb API, Expedia API
+#
+# Integration Pattern:
+# 1. Client requests hotel search via /search/hotels
+# 2. Backend calls Booking.com search API
+# 3. Results enriched with Google Places data
+# 4. Response normalized to Accommodation schema
+# 5. Affiliate links generated for booking
+#
+# Key Endpoints:
+# - GET /json/bookings.getHotels (Booking.com)
+# - GET /json/bookings.getHotelAvailability (Booking.com)
+#
+# Caching Strategy:
+# - Hotel list: 1 hour
+# - Availability: 10 minutes
+# - Prices: 5 minutes
+
+# ATTRACTION/ACTIVITY APIs
+# ------------------------
+# Primary: Google Places API
+# Secondary: TripAdvisor API, GetYourGuide API
+#
+# Integration Pattern:
+# 1. Client requests attraction search via /search/attractions
+# 2. Backend calls Google Places Nearby Search
+# 3. Results enriched with TripAdvisor ratings
+# 4. Response normalized to Attraction schema
+# 5. Booking links from GetYourGuide when available
+#
+# Key Endpoints:
+# - GET /place/nearbysearch/json (Google Places)
+# - GET /place/details/json (Google Places)
+#
+# Caching Strategy:
+# - Place details: 24 hours
+# - Photos: 7 days
+# - Reviews: 12 hours
+
+# PINTEREST API
+# -------------
+# API: Pinterest API v5
+#
+# Integration Pattern:
+# 1. User connects Pinterest account via OAuth
+# 2. Backend fetches user's boards
+# 3. User selects boards to analyze
+# 4. Backend uses image recognition/ML to extract interests
+# 5. Interests mapped to trip categories
+#
+# Key Endpoints:
+# - GET /v5/boards (Pinterest)
+# - GET /v5/boards/{board_id}/pins (Pinterest)
+
+# =============================================================================
+# WEBSOCKET/SSE MESSAGE TYPES
+# =============================================================================
+
+# WebSocket Connection Flow:
+# 1. Client authenticates via REST API
+# 2. Client opens WebSocket: wss://api.tripplanner.com/v1/ws/connect?token={jwt}
+# 3. Server validates token and associates connection with user
+# 4. Client can subscribe to specific trip updates
+#
+# Client -> Server Messages:
+# {
+#   "type": "subscribe",
+#   "tripId": "trp_xxx"
+# }
+#
+# {
+#   "type": "unsubscribe",
+#   "tripId": "trp_xxx"
+# }
+#
+# {
+#   "type": "ping"
+# }
+#
+# Server -> Client Messages:
+# {
+#   "type": "planning_update",
+#   "tripId": "trp_xxx",
+#   "data": {
+#     "stage": "generating_itinerary",
+#     "progress": 65,
+#     "message": "Creating day-by-day itinerary..."
+#   }
+# }
+#
+# {
+#   "type": "notification",
+#   "notification": {
+#     "id": "not_xxx",
+#     "title": "Flight Price Drop",
+#     "message": "Your selected flight price dropped by $50!",
+#     "severity": "info",
+#     "actionUrl": "/trips/trp_xxx/flights"
+#   }
+# }
+#
+# {
+#   "type": "itinerary_update",
+#   "tripId": "trp_xxx",
+#   "data": {
+#     "action": "item_delayed",
+#     "itemId": "itm_xxx",
+#     "fromDate": "2024-04-01",
+#     "toDate": "2024-04-02"
+#   }
+# }
+#
+# {
+#   "type": "pong",
+#   "timestamp": "2024-01-15T10:30:00Z"
+# }
+
+# SSE Event Types:
+# event: planning_update
+# data: {"tripId": "trp_xxx", "stage": "finding_flights", "progress": 40}
+#
+# event: notification
+# data: {"id": "not_xxx", "title": "Planning Complete", "message": "..."}
+#
+# event: price_alert
+# data: {"type": "flight", "itemId": "flt_xxx", "oldPrice": 500, "newPrice": 450}
