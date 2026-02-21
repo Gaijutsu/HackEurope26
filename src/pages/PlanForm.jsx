@@ -76,14 +76,33 @@ export default function PlanForm() {
     })
 
     const [submitted, setSubmitted] = useState(false)
+    const [errors, setErrors] = useState({})
 
     const handleChange = (e) => {
         const { name, value } = e.target
         setForm((prev) => ({ ...prev, [name]: value }))
+        // Clear error when user types
+        if (errors[name]) {
+            setErrors((prev) => ({ ...prev, [name]: '' }))
+        }
     }
 
     const handleSubmit = (e) => {
         e.preventDefault()
+
+        const newErrors = {}
+        if (!form.vibe.trim()) newErrors.vibe = 'Please describe your vibe'
+        if (!form.budget) newErrors.budget = 'Please enter your budget'
+        if (!form.accommodation) newErrors.accommodation = 'Please select where you will stay'
+
+        if (Object.keys(newErrors).length > 0) {
+            setErrors(newErrors)
+            // Scroll to first error
+            const firstError = Object.keys(newErrors)[0]
+            document.getElementById(firstError)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            return
+        }
+
         setSubmitted(true)
     }
 
@@ -144,16 +163,20 @@ export default function PlanForm() {
                 <motion.form className="plan__form" onSubmit={handleSubmit} variants={itemVariants}>
                     {/* Vibe */}
                     <div className="plan__section">
-                        <h2 className="plan__section-title">Your vibe</h2>
+                        <div className="plan__label-row">
+                            <h2 className="plan__section-title">Your vibe</h2>
+                            <span className="plan__required-tag">required</span>
+                        </div>
                         <input
                             id="vibe"
                             type="text"
                             name="vibe"
-                            className="plan__input"
+                            className={`plan__input ${errors.vibe ? 'plan__input--error' : ''}`}
                             placeholder="Describe the vibe you're looking for..."
                             value={form.vibe}
                             onChange={handleChange}
                         />
+                        {errors.vibe && <span className="plan__error-text">{errors.vibe}</span>}
                     </div>
 
                     {/* Dates */}
@@ -161,7 +184,10 @@ export default function PlanForm() {
                         <h2 className="plan__section-title">When are you going?</h2>
                         <div className="plan__row">
                             <div className="plan__field">
-                                <label htmlFor="startDate" className="plan__label">Departure</label>
+                                <div className="plan__label-row">
+                                    <label htmlFor="startDate" className="plan__label">Departure</label>
+                                    <span className="plan__required-tag">required</span>
+                                </div>
                                 <input
                                     id="startDate"
                                     type="date"
@@ -173,7 +199,10 @@ export default function PlanForm() {
                                 />
                             </div>
                             <div className="plan__field">
-                                <label htmlFor="endDate" className="plan__label">Return</label>
+                                <div className="plan__label-row">
+                                    <label htmlFor="endDate" className="plan__label">Return</label>
+                                    <span className="plan__required-tag">required</span>
+                                </div>
                                 <input
                                     id="endDate"
                                     type="date"
@@ -192,20 +221,24 @@ export default function PlanForm() {
                         <h2 className="plan__section-title">Budget & group</h2>
                         <div className="plan__row">
                             <div className="plan__field">
-                                <label htmlFor="budget" className="plan__label">Budget (per person)</label>
+                                <div className="plan__label-row">
+                                    <label htmlFor="budget" className="plan__label">Budget (per person)</label>
+                                    <span className="plan__required-tag">required</span>
+                                </div>
                                 <div className="plan__input-wrap plan__input-wrap--prefix">
                                     <span className="plan__input-prefix">$</span>
                                     <input
                                         id="budget"
                                         type="number"
                                         name="budget"
-                                        className="plan__input plan__input--prefixed"
+                                        className={`plan__input plan__input--prefixed ${errors.budget ? 'plan__input--error' : ''}`}
                                         placeholder="2,000"
                                         value={form.budget}
                                         onChange={handleChange}
                                         min="0"
                                     />
                                 </div>
+                                {errors.budget && <span className="plan__error-text">{errors.budget}</span>}
                             </div>
                             <div className="plan__field">
                                 <label htmlFor="travelers" className="plan__label">Travelers</label>
@@ -226,20 +259,27 @@ export default function PlanForm() {
                     </div>
 
                     {/* Accommodation */}
-                    <div className="plan__section">
-                        <h2 className="plan__section-title">Where will you stay?</h2>
+                    <div className="plan__section" id="accommodation">
+                        <div className="plan__label-row">
+                            <h2 className="plan__section-title">Where will you stay?</h2>
+                            <span className="plan__required-tag">required</span>
+                        </div>
                         <div className="plan__chips">
                             {ACCOMMODATION_TYPES.map((type) => (
                                 <button
                                     key={type}
                                     type="button"
-                                    className={`plan__chip ${form.accommodation === type ? 'plan__chip--active' : ''}`}
-                                    onClick={() => setForm((prev) => ({ ...prev, accommodation: type }))}
+                                    className={`plan__chip ${form.accommodation === type ? 'plan__chip--active' : ''} ${errors.accommodation ? 'plan__chip--error' : ''}`}
+                                    onClick={() => {
+                                        setForm((prev) => ({ ...prev, accommodation: type }))
+                                        if (errors.accommodation) setErrors(prev => ({ ...prev, accommodation: '' }))
+                                    }}
                                 >
                                     {type}
                                 </button>
                             ))}
                         </div>
+                        {errors.accommodation && <span className="plan__error-text">{errors.accommodation}</span>}
                     </div>
 
                     {/* Food */}
