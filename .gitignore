@@ -212,3 +212,6 @@ dist/
 .env
 .env.local
 *.local
+
+public/pinterest/*
+!public/pinterest/mock

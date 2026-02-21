@@ -5,25 +5,6 @@ import MoodBoardCard from '../components/MoodBoardCard'
 import CityAutocomplete from '../components/CityAutocomplete'
 import './Landing.css'
 
-const MOOD_BOARDS = [
-    {
-        id: 1,
-        image: '/images/mood-european-cafe.png',
-    },
-    {
-        id: 2,
-        image: '/images/mood-tropical-beach.png',
-    },
-    {
-        id: 3,
-        image: 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=600&h=800&fit=crop&q=80',
-    },
-    {
-        id: 4,
-        image: 'https://images.unsplash.com/photo-1514565131-fce0801e5785?w=600&h=800&fit=crop&q=80',
-    },
-]
-
 const containerVariants = {
     hidden: {},
     visible: {
@@ -54,12 +35,25 @@ const pageVariants = {
     },
 }
 
+const skeletonVariants = {
+    pulse: {
+        opacity: [0.4, 0.7, 0.4],
+        transition: {
+            duration: 1.5,
+            repeat: Infinity,
+            ease: 'easeInOut',
+        },
+    },
+}
+
 export default function Landing() {
     const [destination, setDestination] = useState('')
+    const [selectedCity, setSelectedCity] = useState(null)
     const [cityValid, setCityValid] = useState(false)
     const [searched, setSearched] = useState(false)
-    const [isSearching, setIsSearching] = useState(false)
-    // Map of mood.id -> 'upvoted' | 'downvoted' | 'neither'
+    const [isLoadingImages, setIsLoadingImages] = useState(false)
+    const [moodBoards, setMoodBoards] = useState([])
+    // Map of index -> 'upvoted' | 'downvoted' | 'neither'
     const [votes, setVotes] = useState({})
     const navigate = useNavigate()
 
@@ -67,46 +61,63 @@ export default function Landing() {
         setDestination(val)
         // Any manual typing invalidates — must re-select from dropdown
         setCityValid(false)
+        setSelectedCity(null)
         // Reset mood boards if destination changes after a search
-        if (searched) setSearched(false)
+        if (searched) {
+            setSearched(false)
+            setMoodBoards([])
+        }
     }, [searched])
 
     const handleCitySelect = useCallback((entry) => {
         setCityValid(true)
+        setSelectedCity(entry)
         setDestination(entry.city)
     }, [])
 
-    const handleSearch = (e) => {
+    const handleSearch = async (e) => {
         e.preventDefault()
-        if (!destination.trim() || !cityValid) return
-        setIsSearching(true)
-        setTimeout(() => {
-            setIsSearching(false)
-            setSearched(true)
-        }, 800)
+        if (!destination.trim() || !cityValid || !selectedCity) return
+        
+        setSearched(true)
+        setIsLoadingImages(true)
+        setMoodBoards([])
+        setVotes({})
+
+        try {
+            const url = `http://localhost:8000/pinterest?city=${encodeURIComponent(selectedCity.city)}&country=${encodeURIComponent(selectedCity.country)}`
+            const response = await fetch(url)
+            const data = await response.json()
+            setMoodBoards(data.map((imageUrl, index) => ({ id: index, image: imageUrl })))
+        } catch (error) {
+            console.error('Failed to fetch mood boards:', error)
+            setMoodBoards([])
+        } finally {
+            setIsLoadingImages(false)
+        }
     }
 
-    const handleUpvote = (mood) => {
-        setVotes((prev) => ({
-            ...prev,
-            [mood.id]: prev[mood.id] === 'upvoted' ? 'neither' : 'upvoted',
-        }))
-    }
+const handleUpvote = (id) => {
+    setVotes((prev) => ({
+        ...prev,
+        [id]: prev[id] === 'upvoted' ? 'neither' : 'upvoted',
+    }))
+}
 
-    const handleDownvote = (mood) => {
-        setVotes((prev) => ({
-            ...prev,
-            [mood.id]: prev[mood.id] === 'downvoted' ? 'neither' : 'downvoted',
-        }))
-    }
+const handleDownvote = (id) => {
+    setVotes((prev) => ({
+        ...prev,
+        [id]: prev[id] === 'downvoted' ? 'neither' : 'downvoted',
+    }))
+}
 
     const getUpvotedCards = () =>
-        MOOD_BOARDS.filter((m) => votes[m.id] === 'upvoted')
+        moodBoards.filter((mood) => votes[mood.id] === 'upvoted')
 
     const getDownvotedCards = () =>
-        MOOD_BOARDS.filter((m) => votes[m.id] === 'downvoted')
+        moodBoards.filter((mood) => votes[mood.id] === 'downvoted')
 
-    const getVoteState = (mood) => votes[mood.id] || 'neither'
+    const getVoteState = (id) => votes[id] || 'neither'
 
     const handleSubmit = () => {
         const upvoted = getUpvotedCards().map((m) => m.id)
@@ -162,7 +173,7 @@ export default function Landing() {
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 transition={{ duration: 0.7, delay: 0.5, ease: [0.4, 0, 0.2, 1] }}
             >
-                <div className={`landing__search-bar ${isSearching ? 'landing__search-bar--loading' : ''}`}>
+                <div className={`landing__search-bar ${isLoadingImages ? 'landing__search-bar--loading' : ''}`}>
                     <svg
                         className="landing__search-icon"
                         width="20"
@@ -181,14 +192,14 @@ export default function Landing() {
                         value={destination}
                         onChange={handleDestinationChange}
                         onValidSelect={handleCitySelect}
-                        disabled={isSearching}
+                        disabled={isLoadingImages}
                     />
                     <button
                         type="submit"
                         className="landing__search-btn"
-                        disabled={!cityValid || isSearching}
+                        disabled={!cityValid || isLoadingImages}
                     >
-                        {isSearching ? (
+                        {isLoadingImages ? (
                             <span className="landing__spinner" />
                         ) : (
                             <svg
@@ -209,92 +220,115 @@ export default function Landing() {
                 </div>
             </motion.form>
 
-            <AnimatePresence>
-                {searched && (
-                    <motion.section
-                        className="landing__results"
-                        initial={{ opacity: 0, y: 40 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: 20 }}
-                        transition={{ duration: 0.6, ease: [0.4, 0, 0.2, 1] }}
+            {searched && (
+                <motion.section
+                    className="landing__results"
+                    initial={{ opacity: 0, y: 40 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 20 }}
+                    transition={{ duration: 0.6, ease: [0.4, 0, 0.2, 1] }}
+                >
+                    <motion.p
+                        className="landing__results-label"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ delay: 0.1 }}
                     >
-                        <motion.p
-                            className="landing__results-label"
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            transition={{ delay: 0.1 }}
-                        >
-                            Pick the vibe that speaks to you
-                        </motion.p>
-                        <motion.div
-                            className="landing__grid"
-                            variants={containerVariants}
-                            initial="hidden"
-                            animate="visible"
-                        >
-                            {MOOD_BOARDS.map((mood) => (
+                        {isLoadingImages ? 'Finding your perfect vibes...' : 'Pick the vibe that speaks to you'}
+                    </motion.p>
+                    <motion.div
+                        className="landing__grid"
+                        variants={containerVariants}
+                        initial="hidden"
+                        animate="visible"
+                    >
+                        {isLoadingImages ? (
+                            // Skeleton loading cards
+                            [...Array(4)].map((_, i) => (
+                                <motion.div
+                                    key={`skeleton-${i}`}
+                                    className="landing__skeleton-card"
+                                    variants={skeletonVariants}
+                                    animate="pulse"
+                                    style={{ animationDelay: `${i * 0.15}s` }}
+                                >
+                                    <div className="landing__skeleton-shimmer" />
+                                    <div className="landing__skeleton-icon">
+                                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.3">
+                                            <rect x="3" y="3" width="18" height="18" rx="2" />
+                                            <circle cx="8.5" cy="8.5" r="1.5" />
+                                            <path d="M21 15l-5-5L5 21" />
+                                        </svg>
+                                    </div>
+                                </motion.div>
+                            ))
+                        ) : (
+                            moodBoards.map((mood) => (
                                 <MoodBoardCard
                                     key={mood.id}
                                     mood={mood}
-                                    voteState={getVoteState(mood)}
-                                    onUpvote={() => handleUpvote(mood)}
-                                    onDownvote={() => handleDownvote(mood)}
+                                    voteState={getVoteState(mood.id)}
+                                    onUpvote={() => handleUpvote(mood.id)}
+                                    onDownvote={() => handleDownvote(mood.id)}
                                 />
-                            ))}
-                        </motion.div>
-                        <motion.div
-                            className="landing__submit-wrap"
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ duration: 0.4, ease: [0.4, 0, 0.2, 1] }}
-                        >
-                            <button
-                                type="button"
-                                className="landing__submit-btn"
-                                onClick={handleSubmit}
-                                disabled={!hasVotes}
+                            ))
+                        )}
+                    </motion.div>
+                    <AnimatePresence>
+                        {!isLoadingImages && (
+                            <motion.div
+                                className="landing__submit-wrap"
+                                initial={{ opacity: 0, y: 20 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: 10 }}
+                                transition={{ duration: 0.4, ease: [0.4, 0, 0.2, 1] }}
                             >
-                                <span>Continue with your vibes</span>
-                                <svg
-                                    width="20"
-                                    height="20"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    strokeWidth="2"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
+                                <button
+                                    type="button"
+                                    className="landing__submit-btn"
+                                    onClick={handleSubmit}
+                                    disabled={!hasVotes}
                                 >
-                                    <path d="M5 12h14" />
-                                    <path d="m12 5 7 7-7 7" />
-                                </svg>
-                            </button>
-                            <button
-                                type="button"
-                                className="landing__skip-btn"
-                                onClick={handleSkipToNext}
-                            >
-                                <span>I already know my vibe</span>
-                                <svg
-                                    width="20"
-                                    height="20"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    strokeWidth="2"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
+                                    <span>Continue with your vibes</span>
+                                    <svg
+                                        width="20"
+                                        height="20"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                    >
+                                        <path d="M5 12h14" />
+                                        <path d="m12 5 7 7-7 7" />
+                                    </svg>
+                                </button>
+                                <button
+                                    type="button"
+                                    className="landing__skip-btn"
+                                    onClick={handleSkipToNext}
                                 >
-                                    <path d="M5 12h14" />
-                                    <path d="m12 5 7 7-7 7" />
-                                </svg>
-                            </button>
-                        </motion.div>
-                    </motion.section>
-                )}
-            </AnimatePresence>
-
-
+                                    <span>I already know my vibe</span>
+                                    <svg
+                                        width="20"
+                                        height="20"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                    >
+                                        <path d="M5 12h14" />
+                                        <path d="m12 5 7 7-7 7" />
+                                    </svg>
+                                </button>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+                </motion.section>
+            )}
         </motion.div>
     )
 }
