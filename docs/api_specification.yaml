@@ -1,0 +1,1230 @@
+openapi: 3.0.3
+info:
+  title: Agentic Trip Planner API
+  description: |
+    Multi-agent trip planning API powered by CrewAI.
+
+    ## Overview
+    This API provides endpoints for user authentication, trip management,
+    AI-powered trip planning (with real-time SSE streaming), itinerary management,
+    flight search/booking, and accommodation search/booking.
+
+    ## Authentication
+    Authentication uses JWT Bearer tokens. Register or login to obtain a token.
+    Currently, most endpoints accept `user_id` as a query parameter for simplicity
+    (hackathon mode). A future version should use the `Authorization: Bearer <token>` header
+    and derive the user from the token server-side.
+
+    ## AI Planning Pipeline
+    The planning pipeline uses 5 CrewAI agents in sequence:
+    1. **DestinationResearcher** – web search + LLM for destination intel
+    2. **CitySelector** – picks cities for country-level trips
+    3. **FlightFinder** – searches flights via Amadeus API
+    4. **AccommodationFinder** – searches hotels via Amadeus API
+    5. **ItineraryPlanner** – builds the final day-by-day plan
+
+    The `/trips/{trip_id}/plan/stream` endpoint provides real-time Server-Sent Events
+    (SSE) so the frontend can show live agent progress.
+  version: 2.0.0
+  contact:
+    name: Gaijutsu Team
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+
+tags:
+  - name: Auth
+    description: User registration and login
+  - name: Trips
+    description: CRUD operations for trips
+  - name: Planning
+    description: AI-powered trip planning (sync and streaming)
+  - name: Itinerary
+    description: Day-by-day itinerary management
+  - name: Flights
+    description: Flight suggestions and booking
+  - name: Accommodations
+    description: Accommodation suggestions and booking
+  - name: Search
+    description: City/destination search
+  - name: System
+    description: Health checks and system info
+
+paths:
+  # ─────────────────────────────────────────────
+  # Auth
+  # ─────────────────────────────────────────────
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new user
+      operationId: registerUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserCreate"
+            example:
+              email: "alice@example.com"
+              name: "Alice Smith"
+              password: "s3cret!"
+      responses:
+        "200":
+          description: Registration successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                detail: "Email already registered"
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login with email and password
+      operationId: loginUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserLogin"
+            example:
+              email: "alice@example.com"
+              password: "s3cret!"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                detail: "Invalid credentials"
+
+  # ─────────────────────────────────────────────
+  # Trips
+  # ─────────────────────────────────────────────
+  /trips:
+    get:
+      tags: [Trips]
+      summary: List all trips for a user
+      operationId: listTrips
+      parameters:
+        - $ref: "#/components/parameters/UserIdQuery"
+      responses:
+        "200":
+          description: List of trips
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TripSummary"
+
+    post:
+      tags: [Trips]
+      summary: Create a new trip
+      operationId: createTrip
+      parameters:
+        - $ref: "#/components/parameters/UserIdQuery"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TripCreate"
+            example:
+              title: "Trip to Tokyo"
+              destination: "Tokyo"
+              start_date: "2026-04-01"
+              end_date: "2026-04-07"
+              num_travelers: 2
+              interests: ["Culture", "Food"]
+              dietary_restrictions: ["Vegetarian"]
+              budget_level: "mid"
+      responses:
+        "200":
+          description: Trip created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripCreateResponse"
+
+  /trips/{trip_id}:
+    get:
+      tags: [Trips]
+      summary: Get full trip details
+      operationId: getTrip
+      parameters:
+        - $ref: "#/components/parameters/TripIdPath"
+        - $ref: "#/components/parameters/UserIdQuery"
+      responses:
+        "200":
+          description: Trip details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripDetail"
+        "404":
+          description: Trip not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    delete:
+      tags: [Trips]
+      summary: Delete a trip
+      operationId: deleteTrip
+      parameters:
+        - $ref: "#/components/parameters/TripIdPath"
+        - $ref: "#/components/parameters/UserIdQuery"
+      responses:
+        "200":
+          description: Trip deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Trip deleted successfully"
+        "404":
+          description: Trip not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ─────────────────────────────────────────────
+  # Planning
+  # ─────────────────────────────────────────────
+  /trips/{trip_id}/plan:
+    post:
+      tags: [Planning]
+      summary: Start AI planning (synchronous)
+      description: |
+        Triggers the full CrewAI planning pipeline synchronously.
+        This can take 30–120 seconds depending on destination complexity.
+        For real-time progress, prefer the SSE streaming endpoint instead.
+      operationId: startPlanning
+      parameters:
+        - $ref: "#/components/parameters/TripIdPath"
+        - $ref: "#/components/parameters/UserIdQuery"
+      responses:
+        "200":
+          description: Planning completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlanningResult"
+        "404":
+          description: Trip not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Planning failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                detail: "Planning failed: LLM timeout"
+
+  /trips/{trip_id}/plan/stream:
+    get:
+      tags: [Planning]
+      summary: Stream AI planning progress (SSE)
+      description: |
+        Returns a **Server-Sent Events** (SSE) stream that emits real-time
+        progress events as each agent runs. The frontend should consume this
+        with an `EventSource` or `fetch` with streaming.
+
+        ### Event Format
+        Each event is a JSON object on a `data:` line:
+
+        ```
+        data: {"type":"progress","agent":"DestinationResearcher","status":"running","message":"Researching Tokyo..."}
+
+        data: {"type":"progress","agent":"FlightFinder","status":"done","message":"Found 3 flights"}
+
+        data: {"type":"complete","plan":{...}}
+        ```
+
+        ### Event Types
+
+        | type       | description                                      |
+        |------------|--------------------------------------------------|
+        | `progress` | Agent status update (running / done / skipped)   |
+        | `complete` | Final event — contains the full `plan` object    |
+        | `error`    | An error occurred — contains `message`           |
+
+        ### Agent Names (in execution order)
+        1. `DestinationResearcher`
+        2. `CitySelector`
+        3. `FlightFinder`
+        4. `AccommodationFinder`
+        5. `ItineraryPlanner`
+
+        ### Agent Statuses
+        - `running` — agent has started
+        - `done` — agent finished successfully
+        - `skipped` — agent was not needed (e.g. CitySelector for city-level trips)
+      operationId: streamPlanning
+      parameters:
+        - $ref: "#/components/parameters/TripIdPath"
+        - $ref: "#/components/parameters/UserIdQuery"
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  Newline-delimited SSE events. Each event is prefixed with `data: `
+                  and contains a JSON object matching one of the SSE event schemas.
+              examples:
+                progress:
+                  summary: Progress event
+                  value: |
+                    data: {"type":"progress","agent":"DestinationResearcher","status":"running","message":"Researching destination..."}
+                complete:
+                  summary: Complete event
+                  value: |
+                    data: {"type":"complete","plan":{"cities":["Tokyo"],"flights":[...],"accommodations":[...],"itinerary":[...],"planning_summary":"..."}}
+                error:
+                  summary: Error event
+                  value: |
+                    data: {"type":"error","message":"LLM provider unavailable"}
+        "404":
+          description: Trip not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /trips/{trip_id}/plan/status:
+    get:
+      tags: [Planning]
+      summary: Check planning status
+      operationId: getPlanningStatus
+      parameters:
+        - $ref: "#/components/parameters/TripIdPath"
+        - $ref: "#/components/parameters/UserIdQuery"
+      responses:
+        "200":
+          description: Current planning status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlanningStatus"
+        "404":
+          description: Trip not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ─────────────────────────────────────────────
+  # Itinerary
+  # ─────────────────────────────────────────────
+  /trips/{trip_id}/itinerary:
+    get:
+      tags: [Itinerary]
+      summary: Get the full itinerary grouped by day
+      operationId: getItinerary
+      parameters:
+        - $ref: "#/components/parameters/TripIdPath"
+        - $ref: "#/components/parameters/UserIdQuery"
+      responses:
+        "200":
+          description: Itinerary grouped by day
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Itinerary"
+        "404":
+          description: Trip not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /trips/{trip_id}/itinerary/items/{item_id}/delay:
+    put:
+      tags: [Itinerary]
+      summary: Delay an itinerary item to a different day
+      operationId: delayItineraryItem
+      parameters:
+        - $ref: "#/components/parameters/TripIdPath"
+        - name: item_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The itinerary item ID
+        - $ref: "#/components/parameters/UserIdQuery"
+        - name: new_day
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+          description: The day number to move the item to
+      responses:
+        "200":
+          description: Item delayed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Item delayed to day 3"
+                  item_id:
+                    type: string
+                  new_day:
+                    type: integer
+        "404":
+          description: Trip or item not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /trips/{trip_id}/itinerary/items/{item_id}/complete:
+    put:
+      tags: [Itinerary]
+      summary: Mark an itinerary item as completed
+      operationId: completeItineraryItem
+      parameters:
+        - $ref: "#/components/parameters/TripIdPath"
+        - name: item_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The itinerary item ID
+        - $ref: "#/components/parameters/UserIdQuery"
+      responses:
+        "200":
+          description: Item marked as completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Item marked as completed"
+        "404":
+          description: Trip or item not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ─────────────────────────────────────────────
+  # Flights
+  # ─────────────────────────────────────────────
+  /trips/{trip_id}/flights:
+    get:
+      tags: [Flights]
+      summary: Get all flights for a trip
+      operationId: getFlights
+      parameters:
+        - $ref: "#/components/parameters/TripIdPath"
+        - $ref: "#/components/parameters/UserIdQuery"
+      responses:
+        "200":
+          description: List of flights
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Flight"
+        "404":
+          description: Trip not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /trips/{trip_id}/flights/{flight_id}/book:
+    post:
+      tags: [Flights]
+      summary: Mark a flight as booked
+      operationId: bookFlight
+      parameters:
+        - $ref: "#/components/parameters/TripIdPath"
+        - name: flight_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The flight ID
+        - $ref: "#/components/parameters/UserIdQuery"
+      responses:
+        "200":
+          description: Flight booked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Flight marked as booked"
+                  booking_url:
+                    type: string
+                    format: uri
+                    description: External URL to complete the booking
+        "404":
+          description: Trip or flight not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ─────────────────────────────────────────────
+  # Accommodations
+  # ─────────────────────────────────────────────
+  /trips/{trip_id}/accommodations:
+    get:
+      tags: [Accommodations]
+      summary: Get all accommodations for a trip
+      operationId: getAccommodations
+      parameters:
+        - $ref: "#/components/parameters/TripIdPath"
+        - $ref: "#/components/parameters/UserIdQuery"
+      responses:
+        "200":
+          description: List of accommodations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Accommodation"
+        "404":
+          description: Trip not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /trips/{trip_id}/accommodations/{acc_id}/book:
+    post:
+      tags: [Accommodations]
+      summary: Mark an accommodation as booked
+      operationId: bookAccommodation
+      parameters:
+        - $ref: "#/components/parameters/TripIdPath"
+        - name: acc_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The accommodation ID
+        - $ref: "#/components/parameters/UserIdQuery"
+      responses:
+        "200":
+          description: Accommodation booked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Accommodation marked as booked"
+                  booking_url:
+                    type: string
+                    format: uri
+                    description: External URL to complete the booking
+        "404":
+          description: Trip or accommodation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ─────────────────────────────────────────────
+  # Search
+  # ─────────────────────────────────────────────
+  /search/cities:
+    get:
+      tags: [Search]
+      summary: Search for cities by name
+      operationId: searchCities
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+          description: Search query (partial city name)
+          example: "tok"
+      responses:
+        "200":
+          description: Matching cities
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/City"
+
+  # ─────────────────────────────────────────────
+  # System
+  # ─────────────────────────────────────────────
+  /health:
+    get:
+      tags: [System]
+      summary: Health check
+      operationId: healthCheck
+      responses:
+        "200":
+          description: System status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+# ═══════════════════════════════════════════════
+# Components
+# ═══════════════════════════════════════════════
+components:
+  # ─────────────────────────────────────────────
+  # Reusable parameters
+  # ─────────────────────────────────────────────
+  parameters:
+    UserIdQuery:
+      name: user_id
+      in: query
+      required: true
+      schema:
+        type: string
+      description: The authenticated user's ID
+
+    TripIdPath:
+      name: trip_id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: The trip ID
+
+  # ─────────────────────────────────────────────
+  # Schemas
+  # ─────────────────────────────────────────────
+  schemas:
+    # ── Auth ──────────────────────────────────
+    UserCreate:
+      type: object
+      required: [email, name, password]
+      properties:
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+
+    UserLogin:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    AuthResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+          description: JWT Bearer token (valid 24 hours)
+        token_type:
+          type: string
+          enum: [bearer]
+        user:
+          $ref: "#/components/schemas/UserInfo"
+
+    UserInfo:
+      type: object
+      properties:
+        id:
+          type: string
+          description: 8-character UUID prefix
+          example: "a1b2c3d4"
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+
+    # ── Trips ─────────────────────────────────
+    TripCreate:
+      type: object
+      required: [title, destination, start_date, end_date]
+      properties:
+        title:
+          type: string
+          description: Display title for the trip
+          example: "Trip to Tokyo"
+        destination:
+          type: string
+          description: City or country name. Countries trigger multi-city planning.
+          example: "Tokyo"
+        start_date:
+          type: string
+          format: date
+          description: "ISO date (YYYY-MM-DD)"
+          example: "2026-04-01"
+        end_date:
+          type: string
+          format: date
+          example: "2026-04-07"
+        num_travelers:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 1
+        interests:
+          type: array
+          items:
+            type: string
+            enum:
+              - Culture
+              - Food
+              - Nature
+              - History
+              - Art
+              - Nightlife
+              - Shopping
+              - Adventure
+              - Relaxation
+              - Photography
+          default: []
+        dietary_restrictions:
+          type: array
+          items:
+            type: string
+            enum:
+              - Vegetarian
+              - Vegan
+              - Halal
+              - Kosher
+              - Gluten-free
+              - Dairy-free
+              - Nut-free
+          default: []
+        budget_level:
+          type: string
+          enum: [budget, mid, luxury]
+          default: mid
+          description: |
+            - **budget**: ~$50–150/day
+            - **mid**: ~$150–300/day
+            - **luxury**: $300+/day
+
+    TripCreateResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "f7e8d9c0"
+        title:
+          type: string
+        destination:
+          type: string
+        planning_status:
+          type: string
+          enum: [pending]
+        message:
+          type: string
+          example: "Trip created successfully. Start planning to generate itinerary."
+
+    TripSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        destination:
+          type: string
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        planning_status:
+          $ref: "#/components/schemas/PlanningStatusEnum"
+        created_at:
+          type: string
+          format: date-time
+
+    TripDetail:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        destination:
+          type: string
+        destination_type:
+          type: string
+          enum: [city, country]
+          description: Whether the destination is a single city or a country (multi-city)
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        num_travelers:
+          type: integer
+        interests:
+          type: array
+          items:
+            type: string
+        dietary_restrictions:
+          type: array
+          items:
+            type: string
+        budget_level:
+          type: string
+          enum: [budget, mid, luxury]
+        planning_status:
+          $ref: "#/components/schemas/PlanningStatusEnum"
+        plan_data:
+          description: |
+            The complete AI-generated plan (same shape as PlanData).
+            Empty object `{}` if planning has not yet run.
+          oneOf:
+            - $ref: "#/components/schemas/PlanData"
+            - type: object
+              description: Empty when not yet planned
+        created_at:
+          type: string
+          format: date-time
+
+    # ── Planning ──────────────────────────────
+    PlanningStatusEnum:
+      type: string
+      enum: [pending, in_progress, completed, failed]
+      description: |
+        - **pending**: trip created, planning not started
+        - **in_progress**: agents are currently running
+        - **completed**: plan generated and saved
+        - **failed**: planning encountered an error
+
+    PlanningStatus:
+      type: object
+      properties:
+        trip_id:
+          type: string
+        planning_status:
+          $ref: "#/components/schemas/PlanningStatusEnum"
+        has_plan:
+          type: boolean
+          description: Whether plan_data exists
+
+    PlanningResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [completed]
+        message:
+          type: string
+          example: "Planning completed successfully!"
+        summary:
+          type: string
+          description: Human-readable planning summary from the AI
+        cities:
+          type: array
+          items:
+            type: string
+          description: Cities included in the plan
+          example: ["Tokyo"]
+        flights_count:
+          type: integer
+        accommodations_count:
+          type: integer
+        days_planned:
+          type: integer
+
+    PlanData:
+      type: object
+      description: The complete plan generated by the AI agents
+      properties:
+        cities:
+          type: array
+          items:
+            type: string
+          description: List of cities in the plan
+        flights:
+          type: array
+          items:
+            $ref: "#/components/schemas/FlightData"
+        accommodations:
+          type: array
+          items:
+            $ref: "#/components/schemas/AccommodationData"
+        itinerary:
+          type: array
+          items:
+            $ref: "#/components/schemas/ItineraryDay"
+        is_country_level:
+          type: boolean
+          description: True if the destination was a country (multi-city plan)
+        planning_summary:
+          type: string
+          description: AI-generated text summary of the plan
+
+    # ── SSE Events ────────────────────────────
+    SSEProgressEvent:
+      type: object
+      description: Emitted while agents are running
+      properties:
+        type:
+          type: string
+          enum: [progress]
+        agent:
+          type: string
+          enum:
+            - DestinationResearcher
+            - CitySelector
+            - FlightFinder
+            - AccommodationFinder
+            - ItineraryPlanner
+        status:
+          type: string
+          enum: [running, done, skipped]
+        message:
+          type: string
+          description: Human-readable description of what the agent is doing
+      required: [type, agent, status, message]
+
+    SSECompleteEvent:
+      type: object
+      description: Emitted once when the full plan is ready
+      properties:
+        type:
+          type: string
+          enum: [complete]
+        plan:
+          $ref: "#/components/schemas/PlanData"
+      required: [type, plan]
+
+    SSEErrorEvent:
+      type: object
+      description: Emitted if an error occurs during planning
+      properties:
+        type:
+          type: string
+          enum: [error]
+        message:
+          type: string
+      required: [type, message]
+
+    # ── Flights ───────────────────────────────
+    FlightData:
+      type: object
+      description: Flight data as stored in plan_data (raw from agents)
+      properties:
+        flight_type:
+          type: string
+          enum: [outbound, return, internal]
+        airline:
+          type: string
+          example: "Japan Airlines"
+        flight_number:
+          type: string
+          example: "JL5"
+        from_airport:
+          type: string
+          example: "JFK"
+        to_airport:
+          type: string
+          example: "NRT"
+        departure_datetime:
+          type: string
+          format: date-time
+          example: "2026-04-01T10:30:00"
+        arrival_datetime:
+          type: string
+          format: date-time
+          example: "2026-04-02T14:15:00"
+        duration_minutes:
+          type: integer
+          example: 825
+        price:
+          type: number
+          format: float
+          example: 850.00
+        currency:
+          type: string
+          default: USD
+        booking_url:
+          type: string
+          format: uri
+
+    Flight:
+      allOf:
+        - type: object
+          properties:
+            id:
+              type: string
+              description: Database-generated ID
+            status:
+              type: string
+              enum: [suggested, selected, booked]
+              description: |
+                - **suggested**: AI-generated suggestion
+                - **selected**: user has selected this option
+                - **booked**: user has marked as booked
+        - $ref: "#/components/schemas/FlightData"
+
+    # ── Accommodations ────────────────────────
+    AccommodationData:
+      type: object
+      description: Accommodation data as stored in plan_data (raw from agents)
+      properties:
+        name:
+          type: string
+          example: "Hotel Gracery Shinjuku"
+        type:
+          type: string
+          enum: [hotel, hostel, apartment]
+        address:
+          type: string
+        city:
+          type: string
+        check_in_date:
+          type: string
+          format: date
+        check_out_date:
+          type: string
+          format: date
+        price_per_night:
+          type: number
+          format: float
+          example: 120.00
+        total_price:
+          type: number
+          format: float
+          example: 720.00
+        currency:
+          type: string
+          default: USD
+        rating:
+          type: number
+          format: float
+          nullable: true
+          minimum: 0
+          maximum: 5
+          example: 4.2
+        amenities:
+          type: array
+          items:
+            type: string
+          example: ["WiFi", "Breakfast", "AC"]
+        booking_url:
+          type: string
+          format: uri
+
+    Accommodation:
+      allOf:
+        - type: object
+          properties:
+            id:
+              type: string
+            status:
+              type: string
+              enum: [suggested, selected, booked]
+        - $ref: "#/components/schemas/AccommodationData"
+
+    # ── Itinerary ─────────────────────────────
+    ItineraryDay:
+      type: object
+      properties:
+        day_number:
+          type: integer
+          minimum: 1
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ItineraryItemData"
+
+    ItineraryItemData:
+      type: object
+      description: A single activity / event within a day
+      properties:
+        title:
+          type: string
+          example: "Visit Senso-ji Temple"
+        description:
+          type: string
+        start_time:
+          type: string
+          pattern: "^\\d{2}:\\d{2}$"
+          example: "10:00"
+        duration_minutes:
+          type: integer
+          example: 120
+        item_type:
+          type: string
+          enum: [attraction, meal, transport, free_time]
+        location:
+          type: string
+        google_maps_url:
+          type: string
+          format: uri
+          description: Direct Google Maps search link for the location
+        cost_usd:
+          type: number
+          format: float
+          description: Estimated cost in USD
+        cost_local:
+          type: string
+          description: Cost displayed in local currency (e.g. "¥2,000")
+        currency:
+          type: string
+          default: USD
+        notes:
+          type: string
+        is_ai_suggested:
+          type: integer
+          enum: [0, 1]
+          description: "1 = AI-generated, 0 = user-added"
+
+    ItineraryItem:
+      allOf:
+        - type: object
+          properties:
+            id:
+              type: string
+            day_number:
+              type: integer
+            status:
+              type: string
+              enum: [planned, completed, skipped, delayed]
+            delayed_to_day:
+              type: integer
+              nullable: true
+              description: If delayed, the new day number
+            booking_url:
+              type: string
+              nullable: true
+        - $ref: "#/components/schemas/ItineraryItemData"
+
+    Itinerary:
+      type: object
+      properties:
+        trip_id:
+          type: string
+        destination:
+          type: string
+        days:
+          type: array
+          items:
+            type: object
+            properties:
+              day_number:
+                type: integer
+              items:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ItineraryItem"
+
+    # ── Search ────────────────────────────────
+    City:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          example: "Tokyo"
+        country:
+          type: string
+          example: "Japan"
+        iata_code:
+          type: string
+          nullable: true
+          example: "NRT"
+
+    # ── System ────────────────────────────────
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "ok"
+        version:
+          type: string
+          example: "2.0.0"
+        engine:
+          type: string
+          example: "CrewAI"
+        llm:
+          type: string
+          description: Current LLM model name
+          example: "gpt-4o-mini"
+        llm_provider:
+          type: string
+          description: LLM provider (openai, gemini, anthropic)
+          example: "openai"
+        agents:
+          type: array
+          items:
+            type: string
+          example:
+            - DestinationResearcher
+            - CitySelector
+            - FlightFinder
+            - AccommodationFinder
+            - ItineraryPlanner
+
+    # ── Errors ────────────────────────────────
+    ErrorResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+          description: Human-readable error message

@@ -106,7 +106,13 @@ def show_login():
                             st.success("Login successful!")
                             st.rerun()
                         else:
-                            st.error("Invalid email or password")
+                            try:
+                                detail = response.json().get("detail", "Invalid email or password")
+                            except (ValueError, KeyError):
+                                detail = f"Login failed (HTTP {response.status_code})"
+                            st.error(detail)
+                    except requests.exceptions.ConnectionError:
+                        st.error("Cannot connect to backend. Is the API server running on port 8000?")
                     except Exception as e:
                         st.error(f"Error: {str(e)}")
         
@@ -150,7 +156,13 @@ def show_register():
                             st.success("Account created successfully!")
                             st.rerun()
                         else:
-                            st.error("Email already registered")
+                            try:
+                                detail = response.json().get("detail", "Registration failed")
+                            except (ValueError, KeyError):
+                                detail = f"Registration failed (HTTP {response.status_code})"
+                            st.error(detail)
+                    except requests.exceptions.ConnectionError:
+                        st.error("Cannot connect to backend. Is the API server running on port 8000?")
                     except Exception as e:
                         st.error(f"Error: {str(e)}")
         
@@ -592,10 +604,21 @@ def show_itinerary():
                             st.write(f"_{item['description']}_")
                             
                             if item.get("location"):
-                                st.write(f"📍 {item['location']}")
+                                maps_url = item.get("google_maps_url", "")
+                                if maps_url:
+                                    st.markdown(f"📍 [{item['location']}]({maps_url})")
+                                else:
+                                    st.write(f"📍 {item['location']}")
                             
-                            if item.get("cost", 0) > 0:
-                                st.write(f"💵 ${item['cost']}")
+                            # Show local currency + USD
+                            cost_local = item.get("cost_local", "")
+                            cost_usd = item.get("cost_usd", item.get("cost", 0))
+                            currency = item.get("currency", "USD")
+                            if cost_usd and float(cost_usd) > 0:
+                                if currency != "USD" and cost_local:
+                                    st.write(f"💵 {cost_local} (~${cost_usd} USD)")
+                                else:
+                                    st.write(f"💵 ${cost_usd}")
                         
                         with col3:
                             # Status

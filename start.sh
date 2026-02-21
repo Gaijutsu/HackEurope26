@@ -75,10 +75,10 @@ echo "Installing dependencies..."
 pip install -q -r requirements.txt
 
 # ── Fresh database ───────────────────────────────────────
-if [ -f trip_planner.db ]; then
-    echo "Removing old database..."
-    rm trip_planner.db
-fi
+# if [ -f trip_planner.db ]; then
+#     echo "Removing old database..."
+#     rm trip_planner.db
+# fi
 
 # ── Start backend ────────────────────────────────────────
 echo ""

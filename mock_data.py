@@ -139,6 +139,8 @@ def get_airport_for_city(city_name):
 
 def generate_mock_flights(from_city, to_city, departure_date, return_date=None, num_travelers=1):
     """Generate mock flight options"""
+
+    print("MOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\n")
     from_airport = get_airport_for_city(from_city)
     to_airport = get_airport_for_city(to_city)
     
@@ -224,6 +226,8 @@ def generate_mock_flights(from_city, to_city, departure_date, return_date=None, 
 
 def generate_mock_accommodations(city_name, check_in, check_out, num_guests=1):
     """Generate mock hotel options"""
+    print("MOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\nMOCK DATA USED\n")
+
     hotels = HOTEL_TEMPLATES.get(city_name, DEFAULT_HOTELS)
     
     accommodations = []

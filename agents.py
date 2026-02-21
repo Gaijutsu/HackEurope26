@@ -4,12 +4,12 @@ CrewAI Multi-Agent Trip Planner
 Orchestrates a crew of specialized agents that collaborate to plan trips:
   1. DestinationResearcher  - web search + LLM for destination intel
   2. CitySelector           - picks cities for country-level trips
-  3. FlightFinder           - uses Amadeus flight search (via FlightAgent)
-  4. AccommodationFinder    - uses Amadeus hotel search (via AccomAgent)
+  3. FlightFinder           - wraps mock flight data
+  4. AccommodationFinder    - wraps mock accommodation data
   5. ItineraryPlanner       - builds the final day-by-day plan
 
-FlightAgent and AccomAgent are used both as tools within the crew AND
-to generate the final structured data returned to the frontend.
+The agents share context through CrewAI's task dependency system so that
+each agent can build on the work of previous agents.
 """
 
 from __future__ import annotations
@@ -20,25 +20,8 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Generator, List, Optional
 
 from crewai import Agent, Crew, Process, Task
+from crewai.tasks.task_output import TaskOutput
 from crewai.tools import tool as crewai_tool
-
-TRACING = True
-VERBOSE = True
-
-# ---------------------------------------------------------------------------
-# Import Amadeus-backed tools from sub-agents.
-# Try relative import (when loaded as agents.planning_agent package member),
-# fall back to absolute (when loaded directly from sys.path in tests).
-# ---------------------------------------------------------------------------
-try:
-    from .FlightAgent import search_flights as _amadeus_flights_tool
-    from .AccomAgent import search_hotels as _amadeus_hotels_tool
-except ImportError:
-    from FlightAgent import search_flights as _amadeus_flights_tool  # type: ignore
-    from AccomAgent import search_hotels as _amadeus_hotels_tool  # type: ignore
-
-_amadeus_flights_fn = _amadeus_flights_tool.func
-_amadeus_hotels_fn = _amadeus_hotels_tool.func
 
 # Optional: web search & scraping tools (need TAVILY_API_KEY / SERPER_API_KEY)
 _web_search_tools: list = []
@@ -50,7 +33,6 @@ try:
         from crewai_tools import SerperDevTool
         _web_search_tools.append(SerperDevTool())
 except Exception:
-    assert False
     pass  # web search unavailable - agents will use LLM knowledge only
 
 try:
@@ -63,50 +45,11 @@ from mock_data import (
     generate_mock_flights,
     generate_mock_accommodations,
     get_city_info,
-    get_airport_for_city,
 )
 
-# ---------------------------------------------------------------------------
-# IATA code mappings (city name → airport/city code for Amadeus)
-# ---------------------------------------------------------------------------
-
-_CITY_TO_AIRPORT: dict[str, str] = {
-    "New York": "JFK", "London": "LHR", "Paris": "CDG", "Tokyo": "NRT",
-    "Los Angeles": "LAX", "Chicago": "ORD", "Sydney": "SYD", "Dubai": "DXB",
-    "Singapore": "SIN", "Bangkok": "BKK", "Barcelona": "BCN", "Rome": "FCO",
-    "Amsterdam": "AMS", "Berlin": "BER", "Prague": "PRG", "Istanbul": "IST",
-    "San Francisco": "SFO", "Miami": "MIA", "Boston": "BOS", "Kyoto": "KIX",
-    "Osaka": "KIX", "Madrid": "MAD", "Lisbon": "LIS", "Vienna": "VIE",
-    "Zurich": "ZRH", "Copenhagen": "CPH", "Stockholm": "ARN", "Seoul": "ICN",
-}
-
-_CITY_TO_IATA_CITY: dict[str, str] = {
-    "New York": "NYC", "London": "LON", "Paris": "PAR", "Tokyo": "TYO",
-    "Los Angeles": "LAX", "Chicago": "CHI", "Sydney": "SYD", "Dubai": "DXB",
-    "Singapore": "SIN", "Bangkok": "BKK", "Barcelona": "BCN", "Rome": "ROM",
-    "Amsterdam": "AMS", "Berlin": "BER", "Prague": "PRG", "Istanbul": "IST",
-    "San Francisco": "SFO", "Miami": "MIA", "Boston": "BOS", "Kyoto": "OSA",
-    "Osaka": "OSA", "Madrid": "MAD", "Lisbon": "LIS", "Vienna": "VIE",
-    "Zurich": "ZRH", "Copenhagen": "CPH", "Stockholm": "STO", "Seoul": "SEL",
-}
-
-
-def _airport_code(city: str) -> str:
-    return _CITY_TO_AIRPORT.get(city, get_airport_for_city(city))
-
-
-def _city_iata(city: str) -> str:
-    return _CITY_TO_IATA_CITY.get(city, city[:3].upper())
-
-
-def _is_mock_flight(f: dict) -> bool:
-    """True when a dict looks like mock-data format (has the keys the DB expects)."""
-    return "flight_type" in f and "airline" in f and "flight_number" in f
-
-
-def _is_mock_accom(a: dict) -> bool:
-    return "name" in a and "price_per_night" in a and "check_in_date" in a
-
+# Colleague's Amadeus-backed agents (graceful fallback to mock data)
+from agents.FlightAgent import search_flights as amadeus_search_flights
+from agents.AccomAgent import search_hotels as amadeus_search_hotels
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -144,39 +87,23 @@ def _calc_duration(start: str, end: str) -> int:
     return (e - s).days + 1
 
 
-def _gmaps_url(place: str, city: str) -> str:
-    """Build a Google Maps search URL for a place in a city."""
-    query = f"{place} {city}".replace(" ", "+")
-    return f"https://www.google.com/maps/search/{query}"
-
-
 def _fallback_day_plan(city: str, day_number: int) -> list[dict]:
     return [
-        {"start_time": "08:30", "duration_minutes": 60, "title": f"Breakfast in {city}",
-         "description": "Start the day with a local breakfast", "item_type": "meal",
-         "location": f"{city} city center",
-         "google_maps_url": _gmaps_url("breakfast cafe", city),
-         "cost_usd": 15, "cost_local": "$15", "currency": "USD", "notes": ""},
+        {"start_time": "08:30", "duration_minutes": 60, "title": "Breakfast",
+         "description": "Start the day at a local cafe", "item_type": "meal",
+         "location": f"{city} Cafe", "cost": 15, "notes": ""},
         {"start_time": "10:00", "duration_minutes": 150, "title": f"Explore {city}",
-         "description": "Walk around the main sights", "item_type": "attraction",
-         "location": f"{city} city center",
-         "google_maps_url": _gmaps_url("city center", city),
-         "cost_usd": 0, "cost_local": "Free", "currency": "USD", "notes": ""},
-        {"start_time": "12:30", "duration_minutes": 60, "title": f"Lunch in {city}",
-         "description": "Midday meal at a popular spot", "item_type": "meal",
-         "location": f"{city} dining district",
-         "google_maps_url": _gmaps_url("restaurant", city),
-         "cost_usd": 25, "cost_local": "$25", "currency": "USD", "notes": ""},
-        {"start_time": "14:00", "duration_minutes": 180, "title": f"{city} main attraction",
-         "description": "Visit the city highlight", "item_type": "attraction",
-         "location": f"{city} main attraction",
-         "google_maps_url": _gmaps_url("top attraction", city),
-         "cost_usd": 20, "cost_local": "$20", "currency": "USD", "notes": ""},
-        {"start_time": "18:00", "duration_minutes": 90, "title": f"Dinner in {city}",
+         "description": "Walk around the city center", "item_type": "attraction",
+         "location": f"{city} City Center", "cost": 0, "notes": ""},
+        {"start_time": "12:30", "duration_minutes": 60, "title": "Lunch",
+         "description": "Local restaurant", "item_type": "meal",
+         "location": f"{city} Restaurant District", "cost": 25, "notes": ""},
+        {"start_time": "14:00", "duration_minutes": 180, "title": f"{city} Main Attraction",
+         "description": "Visit the top attraction", "item_type": "attraction",
+         "location": f"{city} Main Attraction", "cost": 20, "notes": ""},
+        {"start_time": "18:00", "duration_minutes": 90, "title": "Dinner",
          "description": "Evening meal", "item_type": "meal",
-         "location": f"{city} restaurant district",
-         "google_maps_url": _gmaps_url("dinner restaurant", city),
-         "cost_usd": 35, "cost_local": "$35", "currency": "USD", "notes": ""},
+         "location": f"{city} Dining Area", "cost": 35, "notes": ""},
     ]
 
 
@@ -184,6 +111,8 @@ def _fallback_day_plan(city: str, day_number: int) -> list[dict]:
 # LLM model helper  (supports OpenAI, Gemini, Claude via LLM_PROVIDER env var)
 # ---------------------------------------------------------------------------
 
+# CrewAI uses native providers with the format "provider/model-name".
+# Supported LLM_PROVIDER values: openai (default), gemini, anthropic
 _LLM_DEFAULTS = {
     "openai":    "gpt-4o-mini",
     "gemini":    "gemini-2.0-flash",
@@ -192,83 +121,47 @@ _LLM_DEFAULTS = {
 
 
 def _llm_name() -> str:
-    """Return the model string in CrewAI's native `provider/model` format."""
+    """Return the model string in CrewAI's native `provider/model` format.
+
+    Reads:
+      LLM_PROVIDER  - one of: openai, gemini, anthropic  (default: openai)
+      LLM_MODEL     - override the specific model name
+    """
     provider = os.getenv("LLM_PROVIDER", "openai").lower().strip()
     if provider not in _LLM_DEFAULTS:
-        provider = "openai"
+        provider = "openai"  # fallback
     model = os.getenv("LLM_MODEL", _LLM_DEFAULTS[provider])
+
+    # OpenAI models don't need a prefix in CrewAI (it's the default)
     if provider == "openai":
         return model
+    # Gemini & Anthropic need the provider/ prefix
     return f"{provider}/{model}"
 
 
 # ---------------------------------------------------------------------------
-# CrewAI Tools
-# Wrap Amadeus-backed tools with city-name → IATA conversion so that
-# the LLM can pass plain city names without knowing IATA codes.
+# Custom CrewAI Tools (wrapping external APIs / mock data)
 # ---------------------------------------------------------------------------
 
-@crewai_tool("Search Flights")
-def search_flights_tool(
-    origin: str,
-    destination: str,
-    departure_date: str,
-    return_date: str,
-    num_travelers: int = 1,
-) -> str:
-    """Search for available flights between two cities using Amadeus (or mock fallback).
-    Args:
-        origin: Departure city name (e.g. 'New York')
-        destination: Arrival city name (e.g. 'Tokyo')
-        departure_date: YYYY-MM-DD format
-        return_date: YYYY-MM-DD format (empty string for one-way)
-        num_travelers: Number of passengers
-    Returns:
-        JSON string with up to 5 flight options.
-    """
-    origin_code = _airport_code(origin)
-    dest_code = _airport_code(destination)
-    results = _amadeus_flights_fn(origin_code, dest_code, departure_date, return_date, num_travelers)
-    if results and "error" not in results[0]:
-        return json.dumps(results[:5], default=str)
-    # Amadeus failed — fall back to mock data
-    results = generate_mock_flights(origin, destination, departure_date, return_date or None, num_travelers)
-    return json.dumps(results[:5], default=str)
+# Flight search tool — delegates to Amadeus (real API) or mock data
+search_flights_tool = amadeus_search_flights
 
 
-@crewai_tool("Search Accommodations")
-def search_accommodations_tool(
-    city: str,
-    check_in_date: str,
-    check_out_date: str,
-    num_guests: int = 1,
-) -> str:
-    """Search for hotels in a city using Amadeus (or mock fallback).
-    Args:
-        city: City name (e.g. 'Paris')
-        check_in_date: YYYY-MM-DD format
-        check_out_date: YYYY-MM-DD format
-        num_guests: Number of guests
-    Returns:
-        JSON string with up to 5 accommodation options.
-    """
-    city_code = _city_iata(city)
-    results = _amadeus_hotels_fn(city_code, check_in_date, check_out_date, num_guests, "hotel")
-    if results and "error" not in results[0]:
-        return json.dumps(results[:5], default=str)
-    results = generate_mock_accommodations(city, check_in_date, check_out_date, num_guests)
-    return json.dumps(results[:5], default=str)
+# Accommodation search tool — delegates to Amadeus (real API) or mock data
+search_accommodations_tool = amadeus_search_hotels
 
 
 @crewai_tool("Get City Information")
 def get_city_info_tool(city_name: str) -> str:
-    """Get information about a city: attractions, food, transport.
+    """Get detailed information about a city including attractions, food, and transport.
+    Simulates a Google Maps / Places API.
     Args:
         city_name: Name of the city (e.g. 'Tokyo')
     Returns:
-        JSON string with city info.
+        JSON string with city info: country, description, top attractions, best food, local transport.
     """
-    return json.dumps(get_city_info(city_name), default=str)
+    info = get_city_info(city_name)
+    return json.dumps(info, default=str)
 
 
 # ---------------------------------------------------------------------------
@@ -278,10 +171,11 @@ def get_city_info_tool(city_name: str) -> str:
 def _build_agents():
     """Create the five specialized agents with appropriate tools."""
 
-    researcher_tools = list(_web_search_tools)
+    # -- Researcher tools: web search + scraping for real-time destination intel --
+    researcher_tools = list(_web_search_tools)  # Tavily or Serper
     if _scrape_tool:
         researcher_tools.append(_scrape_tool)
-    researcher_tools.append(get_city_info_tool)
+    researcher_tools.append(get_city_info_tool)  # local city DB as fallback
 
     destination_researcher = Agent(
         role="Destination Researcher",
@@ -289,15 +183,17 @@ def _build_agents():
         backstory=(
             "You are a seasoned travel researcher with extensive knowledge of destinations worldwide. "
             "You excel at uncovering practical travel information including top attractions, local food, "
-            "transport tips, and budget considerations. You always provide structured, actionable information."
+            "transport tips, and budget considerations. You always provide structured, actionable information. "
+            "You have access to web search tools and a city database to gather real-time data."
         ),
         tools=researcher_tools,
         llm=_llm_name(),
-        verbose=VERBOSE,
+        verbose=False,
         allow_delegation=False,
         max_iter=8,
     )
 
+    # -- City selector tools: web search + city info --
     selector_tools = list(_web_search_tools)
     selector_tools.append(get_city_info_tool)
 
@@ -307,69 +203,76 @@ def _build_agents():
         backstory=(
             "You are a travel routing expert who knows which cities pair well together and how to "
             "create logical, efficient multi-city itineraries. You consider travel distances, "
-            "city highlights, and traveler interests to select the best route."
+            "city highlights, and traveler interests to select the best route. "
+            "Use the city info tool to verify your selections."
         ),
         tools=selector_tools,
         llm=_llm_name(),
-        verbose=VERBOSE,
+        verbose=False,
         allow_delegation=False,
         max_iter=5,
     )
 
+    # -- Flight finder tool: Skyscanner/Google Flights-like search --
     flight_finder = Agent(
         role="Flight Search Specialist",
-        goal="Find the best flight options using the Amadeus-powered flight search tool",
+        goal="Find the best flight options for the trip using the Amadeus flight search tool",
         backstory=(
-            "You are a flight search expert who uses the Search Flights tool to find optimal air "
-            "travel options via the Amadeus GDS. Always use the tool with city names — IATA code "
-            "conversion is handled automatically. Never make up flight data."
+            "You are a flight search expert who uses the Amadeus GDS (similar to Skyscanner) "
+            "to find the best air travel options. Always use the Search Amadeus Flights tool "
+            "with IATA airport codes (e.g. LHR, JFK, NRT) to get real flight data. "
+            "Never make up flight information."
         ),
         tools=[search_flights_tool],
         llm=_llm_name(),
-        verbose=VERBOSE,
+        verbose=False,
         allow_delegation=False,
-        max_iter=5,
+        max_iter=8,
     )
 
+    # -- Accommodation finder tool: Airbnb/Booking.com-like search --
     accommodation_finder = Agent(
         role="Accommodation Search Specialist",
-        goal="Find the best places to stay for each city using the Amadeus-powered hotel search tool",
+        goal="Find the best places to stay for each city using the Amadeus hotel search tool",
         backstory=(
-            "You are an accommodation expert who uses the Search Accommodations tool to find hotels "
-            "via the Amadeus GDS. Always use the tool with city names — IATA conversion is automatic. "
+            "You are a hospitality expert who uses the Amadeus GDS (similar to Booking.com) "
+            "to find the perfect places to stay. Always use the Search Amadeus Hotels tool "
+            "with IATA city codes (e.g. PAR, LON, TYO) for each city. "
             "Never make up accommodation data."
         ),
         tools=[search_accommodations_tool],
         llm=_llm_name(),
-        verbose=VERBOSE,
+        verbose=False,
         allow_delegation=False,
-        max_iter=5,
+        max_iter=8,
     )
 
+    # -- Itinerary planner tools: city info + web search for activity details --
     planner_tools = [get_city_info_tool]
-    planner_tools.extend(_web_search_tools)
+    planner_tools.extend(_web_search_tools)  # optional web search for activity details
 
     itinerary_planner = Agent(
         role="Itinerary Planner",
-        goal=(
-            "Create a detailed day-by-day itinerary with SPECIFIC named places for every "
-            "activity and meal. Never say 'find a local restaurant' — always name the exact "
-            "restaurant, cafe, or food stall. Include a Google Maps link for every location."
-        ),
+        goal="Create a detailed day-by-day itinerary with specific named places and realistic local prices",
         backstory=(
-            "You are an expert itinerary designer and local food critic who knows specific "
-            "restaurants, cafes, and street food stalls in every major city. You ALWAYS "
-            "recommend places by name (e.g. 'Ichiran Ramen Shibuya', 'Le Bouillon Chartier'). "
-            "You never use generic phrases like 'find a local restaurant' or 'try local food'. "
-            "You include a Google Maps URL for every single location in the itinerary. "
-            "You understand local currencies and always show prices in the local currency "
-            "with a USD equivalent."
+            "You are an expert itinerary designer who creates cohesive, realistic day-by-day "
+            "travel plans. You synthesize destination research, city information, and traveler "
+            "preferences to build plans with proper timing, varied activities, and meals.\n\n"
+            "CRITICAL RULES:\n"
+            "- For every meal, recommend a SPECIFIC REAL restaurant by name and address "
+            "  (never say 'find a local restaurant').\n"
+            "- All costs must be in USD. If the destination uses a different currency "
+            "  (e.g. JPY, EUR, GBP), convert to USD at a reasonable rate. "
+            "  A typical meal in Tokyo is ~$10-30 USD, not $2000.\n"
+            "- For every location, include a Google Maps link in the notes field: "
+            "  https://www.google.com/maps/search/?api=1&query=PLACE+NAME+CITY\n"
+            "- Use the city info tool to get real attraction and food data for each city."
         ),
         tools=planner_tools,
         llm=_llm_name(),
-        verbose=VERBOSE,
+        verbose=False,
         allow_delegation=False,
-        max_iter=10,
+        max_iter=25,
     )
 
     return (
@@ -382,7 +285,7 @@ def _build_agents():
 
 
 # ---------------------------------------------------------------------------
-# CrewAI Task builders
+# CrewAI Task builders (parameterized per trip)
 # ---------------------------------------------------------------------------
 
 def _build_tasks(
@@ -390,6 +293,10 @@ def _build_tasks(
     agents: tuple,
     on_progress: Optional[callable] = None,
 ) -> list[Task]:
+    """
+    Build the five sequential tasks for a trip, wiring context dependencies
+    so agents can collaborate.
+    """
     (
         researcher_agent,
         selector_agent,
@@ -408,8 +315,9 @@ def _build_tasks(
     duration = _calc_duration(start, end)
     is_country = _is_likely_country(dest)
 
+    # Callbacks that fire when each task finishes
     def _make_callback(agent_name: str, done_msg: str):
-        def cb(output: Any):
+        def cb(output: TaskOutput):
             if on_progress:
                 on_progress({
                     "type": "progress",
@@ -419,6 +327,7 @@ def _build_tasks(
                 })
         return cb
 
+    # --- Task 1: Destination Research ---
     research_task = Task(
         description=f"""Research the travel destination **{dest}** for a {duration}-day trip.
 
@@ -442,6 +351,7 @@ Return ONLY valid JSON, no markdown fences or extra text.""",
         callback=_make_callback("DestinationResearcher", f"Research on {dest} complete"),
     )
 
+    # --- Task 2: City Selection ---
     if is_country:
         city_description = f"""Based on the destination research provided in context, select the best cities
 to visit in **{dest}** for a {duration}-day trip.
@@ -464,11 +374,13 @@ Return a JSON array with just this city: ["{dest}"]"""
         expected_output="A JSON array of city names to visit.",
         agent=selector_agent,
         context=[research_task],
-        callback=_make_callback("CitySelector", f"Cities selected for {dest}"),
+        callback=_make_callback("CitySelector",
+                                f"Cities selected for {dest}"),
     )
 
+    # --- Task 3: Flight Search ---
     flight_task = Task(
-        description=f"""Find flights for this trip using the Search Flights tool.
+        description=f"""Find flights for a trip to the destination cities.
 
 Trip details:
 - Departure date: {start}
@@ -476,11 +388,9 @@ Trip details:
 - Number of travelers: {travelers}
 - Origin: New York
 
-Using the cities selected in the context, call the Search Flights tool with:
-  origin="New York", destination=<first city from context>,
-  departure_date="{start}", return_date="{end}", num_travelers={travelers}
+Using the cities selected in the context, search for flights to the first city.
 
-IMPORTANT: Your output MUST be a valid JSON object:
+IMPORTANT: Your output MUST be a valid JSON object with this structure:
 {{
   "origin": "New York",
   "destination_city": "<first city from context>",
@@ -490,23 +400,23 @@ IMPORTANT: Your output MUST be a valid JSON object:
 }}
 
 Return ONLY valid JSON.""",
-        expected_output="A JSON object with flight search parameters used.",
+        expected_output="A JSON object with flight search parameters.",
         agent=flight_agent,
         context=[city_task],
         callback=_make_callback("FlightFinder", "Flight search complete"),
     )
 
+    # --- Task 4: Accommodation Search ---
     accommodation_task = Task(
-        description=f"""Find accommodations for each city using the Search Accommodations tool.
+        description=f"""Find accommodations for each city in the trip.
 
 Trip dates: {start} to {end}
 Number of guests: {travelers}
 Budget level: {budget}
 
-For each city from context, call Search Accommodations with:
-  city=<city name>, check_in_date="{start}", check_out_date="{end}", num_guests={travelers}
+Using the cities from context, search for accommodations in each city.
 
-IMPORTANT: Your output MUST be a valid JSON object:
+IMPORTANT: Your output MUST be a valid JSON object with this structure:
 {{
   "cities": ["<cities from context>"],
   "check_in": "{start}",
@@ -522,49 +432,50 @@ Return ONLY valid JSON.""",
         callback=_make_callback("AccommodationFinder", "Accommodation search complete"),
     )
 
+    # --- Task 5: Itinerary Planning ---
     itinerary_task = Task(
-        description=f"""Create a {duration}-day itinerary for {dest} ({start} to {end}).
+        description=f"""Create a detailed day-by-day itinerary for a {duration}-day trip.
 
-Context from previous agents: destination research, selected cities, flights, accommodations.
+Using ALL the context from previous tasks (destination research, selected cities,
+flights, and accommodations), create a complete itinerary.
 
-Travelers: {travelers} | Interests: {interests} | Diet: {dietary} | Budget: {budget}
+Trip details:
+- Destination: {dest}
+- Dates: {start} to {end} ({duration} days)
+- Interests: {interests}
+- Dietary restrictions: {dietary}
+- Budget: {budget}
+- Number of travelers: {travelers}
 
-CRITICAL RULES:
-1. **Name every restaurant/cafe/food stall specifically** — NEVER say "find a local restaurant"
-   or "try local food". Always give the real name (e.g. "Ichiran Ramen Shibuya", "Pizzeria Da
-   Michele", "Cafe de Flore").
-2. **Google Maps link for EVERY location** — format: https://www.google.com/maps/search/PLACE+NAME+CITY
-3. **Prices in local currency + USD** — e.g. "cost_local": "¥1500", "cost_usd": 10.
-   Use realistic local prices. A bowl of ramen in Tokyo is ~¥1000-1500 ($7-10), NOT $2000.
-4. Each day: 5-7 items including breakfast, lunch, dinner (all named specifically).
-5. Day 1 = arrival, last day = departure. Distribute cities evenly.
+For each day, create 5-7 activities. Return a JSON array where each element is:
+{{
+  "day_number": 1,
+  "date": "YYYY-MM-DD",
+  "city": "CityName",
+  "items": [
+    {{
+      "start_time": "09:00",
+      "duration_minutes": 120,
+      "title": "Activity name",
+      "description": "Brief description",
+      "item_type": "attraction|meal|transport|free_time",
+      "location": "Specific place",
+      "cost": 25,
+      "notes": "Optional notes"
+    }}
+  ]
+}}
 
-Return a JSON array:
-[
-  {{
-    "day_number": 1,
-    "date": "YYYY-MM-DD",
-    "city": "CityName",
-    "items": [
-      {{
-        "start_time": "09:00",
-        "duration_minutes": 90,
-        "title": "Breakfast at Cafe Name",
-        "description": "Known for their fresh croissants and coffee",
-        "item_type": "meal",
-        "location": "Cafe Name, Neighborhood, City",
-        "google_maps_url": "https://www.google.com/maps/search/Cafe+Name+City",
-        "cost_local": "€12",
-        "cost_usd": 13,
-        "currency": "EUR",
-        "notes": ""
-      }}
-    ]
-  }}
-]
+Rules:
+- Include breakfast, lunch, and dinner each day
+- Respect dietary restrictions
+- Day 1 should include arrival activities
+- Last day should include departure activities
+- Use realistic timing
+- Distribute cities evenly across days
 
-Return ONLY valid JSON.""",
-        expected_output="A JSON array of day objects with specific named locations, Google Maps URLs, and local currency prices.",
+Return ONLY valid JSON array.""",
+        expected_output="A JSON array of day objects, each containing day_number, date, city, and items array.",
         agent=planner_agent,
         context=[research_task, city_task, flight_task, accommodation_task],
         callback=_make_callback("ItineraryPlanner", "Itinerary planning complete"),
@@ -574,13 +485,17 @@ Return ONLY valid JSON.""",
 
 
 # ---------------------------------------------------------------------------
-# Result parser
+# Result parser - extract structured data from crew output
 # ---------------------------------------------------------------------------
 
 def _parse_crew_result(
     tasks: list[Task],
     trip_data: Dict[str, Any],
 ) -> Dict[str, Any]:
+    """
+    After the crew finishes, parse each task's output to build the
+    structured plan dict that the rest of the app expects.
+    """
     dest = trip_data["destination"]
     start = trip_data["start_date"]
     end = trip_data["end_date"]
@@ -611,28 +526,17 @@ def _parse_crew_result(
             }
             cities = defaults.get(dest, [f"{dest} City"])
 
-    # --- Flights via Amadeus (falls back to mock when no credentials) ---
+    # --- Generate flights from mock data ---
     origin = "New York"
-    origin_code = _airport_code(origin)
-    dest_code = _airport_code(cities[0])
-    flights = _amadeus_flights_fn(origin_code, dest_code, start, end, travelers)
-    if not flights or (isinstance(flights, list) and flights and "error" in flights[0]):
-        flights = generate_mock_flights(origin, cities[0], start, end, travelers)
-    elif not _is_mock_flight(flights[0]):
-        # Amadeus format — fall back to mock for DB-compatible schema
-        flights = generate_mock_flights(origin, cities[0], start, end, travelers)
+    flights = generate_mock_flights(
+        origin, cities[0], start, end, travelers,
+    )
 
-    # --- Accommodations via Amadeus (falls back to mock when no credentials) ---
+    # --- Generate accommodations from mock data ---
     accommodations: list[dict] = []
     for city in cities:
-        city_code = _city_iata(city)
-        hotels = _amadeus_hotels_fn(city_code, start, end, travelers, "hotel")
-        if not hotels or (isinstance(hotels, list) and hotels and "error" in hotels[0]):
-            hotels = generate_mock_accommodations(city, start, end, travelers)[:3]
-        elif not _is_mock_accom(hotels[0]):
-            # Amadeus format — fall back to mock for DB-compatible schema
-            hotels = generate_mock_accommodations(city, start, end, travelers)[:3]
-        accommodations.extend(hotels[:3])
+        city_accs = generate_mock_accommodations(city, start, end, travelers)
+        accommodations.extend(city_accs[:3])
 
     # --- Parse itinerary ---
     itinerary: list[dict] = []
@@ -641,30 +545,17 @@ def _parse_crew_result(
         parsed_itin = _safe_json_parse(itin_raw)
         if isinstance(parsed_itin, list) and len(parsed_itin) > 0:
             itinerary = parsed_itin
+            # Ensure all items have required fields
             for day in itinerary:
-                city_name = day.get("city", dest)
                 for i, item in enumerate(day.get("items", [])):
                     item.setdefault("id", f"day{day.get('day_number', 0)}_item{i}")
                     item.setdefault("status", "planned")
                     item.setdefault("delayed_to_day", None)
                     item.setdefault("is_ai_suggested", 1)
-
-                    # Normalise cost fields
-                    if "cost_usd" not in item:
-                        raw_cost = item.pop("cost", 0)
-                        item["cost_usd"] = raw_cost if isinstance(raw_cost, (int, float)) else 0
-                    item.setdefault("cost_local", f"${item['cost_usd']}")
-                    item.setdefault("currency", "USD")
-                    # Keep legacy 'cost' key pointing to USD for DB compat
-                    item["cost"] = item["cost_usd"]
-
-                    # Ensure Google Maps link
-                    if not item.get("google_maps_url"):
-                        loc = item.get("location", item.get("title", city_name))
-                        item["google_maps_url"] = _gmaps_url(loc, city_name)
     except Exception:
         pass
 
+    # Fallback: build itinerary from scratch if parsing failed
     if not itinerary:
         itinerary = _build_fallback_itinerary(cities, duration, start)
 
@@ -683,6 +574,7 @@ def _parse_crew_result(
 def _build_fallback_itinerary(
     cities: list[str], duration: int, start_date: str
 ) -> list[dict]:
+    """Build a basic itinerary when the LLM output cannot be parsed."""
     n = len(cities)
     base = duration // max(n, 1)
     extra = duration % max(n, 1)
@@ -714,11 +606,14 @@ def _build_fallback_itinerary(
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public API consumed by FastAPI
 # ---------------------------------------------------------------------------
 
 class TripPlanner:
-    """High-level wrapper around the CrewAI planning crew."""
+    """
+    High-level wrapper around the CrewAI planning crew.
+    Supports both synchronous (plan_trip) and streaming (plan_trip_stream).
+    """
 
     @staticmethod
     def plan_trip(trip_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -730,15 +625,20 @@ class TripPlanner:
             agents=list(agents),
             tasks=tasks,
             process=Process.sequential,
-            verbose=VERBOSE,
-            tracing=TRACING
+            verbose=False,
         )
+
         crew.kickoff()
+
         return _parse_crew_result(tasks, trip_data)
 
     @staticmethod
     def plan_trip_stream(trip_data: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
-        """Generator that yields SSE progress events as the crew executes."""
+        """
+        Generator that yields progress events as the crew executes.
+        Each yield is a dict with agent progress info.
+        The final yield has type="complete" and includes the full plan.
+        """
         progress_events: list[dict] = []
 
         agent_order = [
@@ -752,8 +652,8 @@ class TripPlanner:
         agent_start_messages = {
             "DestinationResearcher": f"Researching {trip_data['destination']}...",
             "CitySelector": f"Selecting cities in {trip_data['destination']}...",
-            "FlightFinder": "Searching for flights via Amadeus...",
-            "AccommodationFinder": "Finding accommodations via Amadeus...",
+            "FlightFinder": "Searching for flights...",
+            "AccommodationFinder": "Finding accommodations...",
             "ItineraryPlanner": "Building your day-by-day itinerary...",
         }
 
@@ -767,8 +667,17 @@ class TripPlanner:
             agents=list(agents),
             tasks=tasks,
             process=Process.sequential,
-            verbose=VERBOSE,
+            verbose=False,
         )
+
+        # Yield start events for each agent, then run the crew,
+        # and yield completion events as they come in.
+        # Since CrewAI runs sequentially, we track task completion
+        # via callbacks and yield progress between tasks.
+
+        # We need to run the crew in a way that lets us yield.
+        # CrewAI doesn't natively support generator-style streaming,
+        # so we run it in a thread and poll for progress events.
 
         import threading
         import time
@@ -786,40 +695,54 @@ class TripPlanner:
         thread = threading.Thread(target=run_crew, daemon=True)
         thread.start()
 
-        yielded_agents: set = set()
-        started_agents: set = set()
+        yielded_agents = set()
+        started_agents = set()
 
         while not result_holder["done"]:
+            # Check for new progress events from callbacks
             while progress_events:
                 event = progress_events.pop(0)
                 agent_name = event.get("agent", "")
+
+                # If this agent hasn't been started yet, yield a "running" event
                 if agent_name not in started_agents:
                     started_agents.add(agent_name)
                     yield {
                         "type": "progress",
                         "agent": agent_name,
                         "status": "running",
-                        "message": agent_start_messages.get(agent_name, f"{agent_name} working..."),
+                        "message": agent_start_messages.get(
+                            agent_name, f"{agent_name} working..."
+                        ),
                     }
+
+                # Yield the done event
                 yielded_agents.add(agent_name)
                 yield event
 
+            # Guess which agent is currently running based on what's completed
             for agent_name in agent_order:
                 if agent_name not in started_agents and agent_name not in yielded_agents:
+                    # Check if all previous agents are done
                     idx = agent_order.index(agent_name)
-                    all_prev_done = all(a in yielded_agents for a in agent_order[:idx])
+                    all_prev_done = all(
+                        a in yielded_agents for a in agent_order[:idx]
+                    )
                     if all_prev_done or idx == 0:
                         started_agents.add(agent_name)
                         yield {
                             "type": "progress",
                             "agent": agent_name,
                             "status": "running",
-                            "message": agent_start_messages.get(agent_name, f"{agent_name} working..."),
+                            "message": agent_start_messages.get(
+                                agent_name, f"{agent_name} working..."
+                            ),
                         }
                     break
 
             time.sleep(0.5)
 
+        # Drain remaining progress events
         while progress_events:
             event = progress_events.pop(0)
             agent_name = event.get("agent", "")
@@ -829,10 +752,13 @@ class TripPlanner:
                     "type": "progress",
                     "agent": agent_name,
                     "status": "running",
-                    "message": agent_start_messages.get(agent_name, f"{agent_name} working..."),
+                    "message": agent_start_messages.get(
+                        agent_name, f"{agent_name} working..."
+                    ),
                 }
             yield event
 
+        # Check for errors
         if result_holder.get("error"):
             yield {
                 "type": "error",
@@ -842,8 +768,10 @@ class TripPlanner:
             }
             return
 
+        # Parse final result
         plan_data = _parse_crew_result(tasks, trip_data)
 
+        # Yield final complete event
         yield {
             "type": "complete",
             "agent": "Orchestrator",
@@ -854,8 +782,9 @@ class TripPlanner:
 
     @staticmethod
     def _is_likely_country(destination: str) -> bool:
+        """Backward-compatible static helper."""
         return _is_likely_country(destination)
 
 
-# Singleton consumed by main.py via `from agents import planning_agent`
+# Backward-compatible singleton
 planning_agent = TripPlanner()
