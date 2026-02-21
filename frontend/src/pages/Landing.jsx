@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import MoodBoardCard from '../components/MoodBoardCard'
 import CityAutocomplete from '../components/CityAutocomplete'
+import LoginBanner from '../components/LoginBanner'
 import './Landing.css'
 
 const containerVariants = {
@@ -78,7 +79,7 @@ export default function Landing() {
     const handleSearch = async (e) => {
         e.preventDefault()
         if (!destination.trim() || !cityValid || !selectedCity) return
-        
+
         setSearched(true)
         setIsLoadingImages(true)
         setMoodBoards([])
@@ -97,19 +98,19 @@ export default function Landing() {
         }
     }
 
-const handleUpvote = (id) => {
-    setVotes((prev) => ({
-        ...prev,
-        [id]: prev[id] === 'upvoted' ? 'neither' : 'upvoted',
-    }))
-}
+    const handleUpvote = (id) => {
+        setVotes((prev) => ({
+            ...prev,
+            [id]: prev[id] === 'upvoted' ? 'neither' : 'upvoted',
+        }))
+    }
 
-const handleDownvote = (id) => {
-    setVotes((prev) => ({
-        ...prev,
-        [id]: prev[id] === 'downvoted' ? 'neither' : 'downvoted',
-    }))
-}
+    const handleDownvote = (id) => {
+        setVotes((prev) => ({
+            ...prev,
+            [id]: prev[id] === 'downvoted' ? 'neither' : 'downvoted',
+        }))
+    }
 
     const getUpvotedCards = () =>
         moodBoards.filter((mood) => votes[mood.id] === 'upvoted')
@@ -142,6 +143,8 @@ const handleDownvote = (id) => {
             animate="animate"
             exit="exit"
         >
+            <LoginBanner />
+
             {/* Decorative background elements */}
             <div className="landing__bg-orb landing__bg-orb--1" />
             <div className="landing__bg-orb landing__bg-orb--2" />

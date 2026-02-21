@@ -215,3 +215,6 @@ dist/
 
 frontend/public/pinterest/*
 !frontend/public/pinterest/mock
+
+# Runtime logs
+nohup.out
