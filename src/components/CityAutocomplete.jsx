@@ -113,13 +113,7 @@ export default function CityAutocomplete({ value, onChange, onValidSelect, disab
         return () => document.removeEventListener('mousedown', handleClickOutside)
     }, [])
 
-    // Format population for display
-    const formatPopulation = (pop) => {
-        if (!pop) return null
-        if (pop >= 1_000_000) return `${(pop / 1_000_000).toFixed(1)}M`
-        if (pop >= 1_000) return `${(pop / 1_000).toFixed(0)}K`
-        return pop.toString()
-    }
+
 
     return (
         <div className="autocomplete" ref={wrapperRef}>
@@ -202,11 +196,7 @@ export default function CityAutocomplete({ value, onChange, onValidSelect, disab
                                         {[entry.region, entry.country].filter(Boolean).join(', ')}
                                     </span>
                                 </div>
-                                {entry.population > 0 && (
-                                    <span className="autocomplete__population">
-                                        {formatPopulation(entry.population)}
-                                    </span>
-                                )}
+
                             </li>
                         ))}
                     </motion.ul>
