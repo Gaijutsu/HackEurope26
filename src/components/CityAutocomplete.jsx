@@ -1,32 +1,53 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { searchCities, isValidCity } from '../data/cities'
+import { searchCities } from '../data/cities'
 import './CityAutocomplete.css'
 
 export default function CityAutocomplete({ value, onChange, onValidSelect, disabled }) {
     const [suggestions, setSuggestions] = useState([])
     const [isOpen, setIsOpen] = useState(false)
+    const [isLoading, setIsLoading] = useState(false)
     const [activeIndex, setActiveIndex] = useState(-1)
     const wrapperRef = useRef(null)
     const inputRef = useRef(null)
     const listRef = useRef(null)
+    const debounceRef = useRef(null)
+
+    // Debounced search — waits 250ms after last keystroke
+    const debouncedSearch = useCallback(async (query) => {
+        if (debounceRef.current) clearTimeout(debounceRef.current)
+
+        if (!query || query.trim().length < 2) {
+            setSuggestions([])
+            setIsOpen(false)
+            setIsLoading(false)
+            return
+        }
+
+        setIsLoading(true)
+
+        debounceRef.current = setTimeout(async () => {
+            const results = await searchCities(query)
+            setSuggestions(results)
+            setIsOpen(results.length > 0)
+            setIsLoading(false)
+            setActiveIndex(-1)
+        }, 250)
+    }, [])
+
+    // Cleanup debounce on unmount
+    useEffect(() => {
+        return () => {
+            if (debounceRef.current) clearTimeout(debounceRef.current)
+        }
+    }, [])
 
     // Update suggestions when input changes
     const handleInputChange = useCallback((e) => {
         const val = e.target.value
         onChange(val)
-
-        if (val.trim().length > 0) {
-            const results = searchCities(val)
-            setSuggestions(results)
-            setIsOpen(results.length > 0)
-            setActiveIndex(-1)
-        } else {
-            setSuggestions([])
-            setIsOpen(false)
-            setActiveIndex(-1)
-        }
-    }, [onChange])
+        debouncedSearch(val)
+    }, [onChange, debouncedSearch])
 
     // Select a city from the dropdown
     const selectCity = useCallback((entry) => {
@@ -34,19 +55,13 @@ export default function CityAutocomplete({ value, onChange, onValidSelect, disab
         setSuggestions([])
         setIsOpen(false)
         setActiveIndex(-1)
+        setIsLoading(false)
         onValidSelect?.(entry)
     }, [onChange, onValidSelect])
 
     // Keyboard navigation
     const handleKeyDown = useCallback((e) => {
         if (!isOpen || suggestions.length === 0) {
-            if (e.key === 'Enter') {
-                e.preventDefault()
-                // Only allow submit if the value is a valid city
-                if (isValidCity(value)) {
-                    onValidSelect?.({ city: value })
-                }
-            }
             return
         }
 
@@ -74,7 +89,7 @@ export default function CityAutocomplete({ value, onChange, onValidSelect, disab
             default:
                 break
         }
-    }, [isOpen, suggestions, activeIndex, selectCity, value, onValidSelect])
+    }, [isOpen, suggestions, activeIndex, selectCity])
 
     // Scroll active item into view
     useEffect(() => {
@@ -98,6 +113,14 @@ export default function CityAutocomplete({ value, onChange, onValidSelect, disab
         return () => document.removeEventListener('mousedown', handleClickOutside)
     }, [])
 
+    // Format population for display
+    const formatPopulation = (pop) => {
+        if (!pop) return null
+        if (pop >= 1_000_000) return `${(pop / 1_000_000).toFixed(1)}M`
+        if (pop >= 1_000) return `${(pop / 1_000).toFixed(0)}K`
+        return pop.toString()
+    }
+
     return (
         <div className="autocomplete" ref={wrapperRef}>
             <input
@@ -110,10 +133,8 @@ export default function CityAutocomplete({ value, onChange, onValidSelect, disab
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
                 onFocus={() => {
-                    if (value.trim().length > 0) {
-                        const results = searchCities(value)
-                        setSuggestions(results)
-                        setIsOpen(results.length > 0)
+                    if (value.trim().length >= 2 && suggestions.length > 0) {
+                        setIsOpen(true)
                     }
                 }}
                 autoComplete="off"
@@ -125,6 +146,15 @@ export default function CityAutocomplete({ value, onChange, onValidSelect, disab
                 aria-activedescendant={activeIndex >= 0 ? `city-option-${activeIndex}` : undefined}
                 disabled={disabled}
             />
+
+            {/* Subtle loading indicator */}
+            {isLoading && (
+                <div className="autocomplete__loading">
+                    <span className="autocomplete__loading-dot" />
+                    <span className="autocomplete__loading-dot" />
+                    <span className="autocomplete__loading-dot" />
+                </div>
+            )}
 
             <AnimatePresence>
                 {isOpen && suggestions.length > 0 && (
@@ -140,14 +170,14 @@ export default function CityAutocomplete({ value, onChange, onValidSelect, disab
                     >
                         {suggestions.map((entry, index) => (
                             <li
-                                key={`${entry.city}-${entry.country}`}
+                                key={`${entry.city}-${entry.country}-${entry.latitude}`}
                                 id={`city-option-${index}`}
                                 role="option"
                                 aria-selected={index === activeIndex}
                                 className={`autocomplete__item ${index === activeIndex ? 'autocomplete__item--active' : ''}`}
                                 onMouseEnter={() => setActiveIndex(index)}
                                 onMouseDown={(e) => {
-                                    e.preventDefault() // Prevent input blur
+                                    e.preventDefault()
                                     selectCity(entry)
                                 }}
                             >
@@ -168,9 +198,15 @@ export default function CityAutocomplete({ value, onChange, onValidSelect, disab
                                 </div>
                                 <div className="autocomplete__item-text">
                                     <span className="autocomplete__city">{highlightMatch(entry.city, value)}</span>
-                                    <span className="autocomplete__country">{entry.country}</span>
+                                    <span className="autocomplete__country">
+                                        {[entry.region, entry.country].filter(Boolean).join(', ')}
+                                    </span>
                                 </div>
-                                <span className="autocomplete__region">{entry.region}</span>
+                                {entry.population > 0 && (
+                                    <span className="autocomplete__population">
+                                        {formatPopulation(entry.population)}
+                                    </span>
+                                )}
                             </li>
                         ))}
                     </motion.ul>

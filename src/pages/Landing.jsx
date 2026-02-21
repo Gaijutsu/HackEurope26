@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import MoodBoardCard from '../components/MoodBoardCard'
 import CityAutocomplete from '../components/CityAutocomplete'
-import { isValidCity } from '../data/cities'
 import './Landing.css'
 
 const MOOD_BOARDS = [
@@ -76,18 +75,20 @@ export default function Landing() {
 
     const handleDestinationChange = useCallback((val) => {
         setDestination(val)
-        setCityValid(isValidCity(val))
+        // Any manual typing invalidates — must re-select from dropdown
+        setCityValid(false)
         // Reset mood boards if destination changes after a search
         if (searched) setSearched(false)
     }, [searched])
 
-    const handleCitySelect = useCallback(() => {
+    const handleCitySelect = useCallback((entry) => {
         setCityValid(true)
+        setDestination(entry.city)
     }, [])
 
     const handleSearch = (e) => {
         e.preventDefault()
-        if (!destination.trim() || !isValidCity(destination)) return
+        if (!destination.trim() || !cityValid) return
         setIsSearching(true)
         // Simulate search delay for smooth animation
         setTimeout(() => {
