@@ -192,8 +192,6 @@ export default function PlanForm() {
             <div className="plan__bg-orb plan__bg-orb--1" />
             <div className="plan__bg-orb plan__bg-orb--2" />
 
-            <LoginBanner />
-
             <motion.button
                 className="plan__back"
                 onClick={() => navigate('/')}
