@@ -213,5 +213,5 @@ dist/
 .env.local
 *.local
 
-public/pinterest/*
-!public/pinterest/mock
+frontend/public/pinterest/*
+!frontend/public/pinterest/mock
