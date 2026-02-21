@@ -6,7 +6,6 @@
     overflow: hidden;
     background: var(--bg-card);
     box-shadow: var(--shadow-sm);
-    cursor: pointer;
     text-align: left;
     transition:
         box-shadow var(--transition-smooth);

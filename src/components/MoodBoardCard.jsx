@@ -18,13 +18,12 @@ const cardVariants = {
     },
 }
 
-export default function MoodBoardCard({ mood, voteState, onUpvote, onDownvote, onClick }) {
+export default function MoodBoardCard({ mood, voteState, onUpvote, onDownvote }) {
     return (
         <motion.div
             className="mood-card"
             variants={cardVariants}
             whileHover={{ y: -6, scale: 1.02 }}
-            onClick={onClick}
             aria-label={`Mood board ${mood.id}`}
         >
             <div className="mood-card__image-wrap">
