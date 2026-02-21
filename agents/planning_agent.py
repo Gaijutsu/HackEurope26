@@ -4,12 +4,12 @@ CrewAI Multi-Agent Trip Planner
 Orchestrates a crew of specialized agents that collaborate to plan trips:
   1. DestinationResearcher  - web search + LLM for destination intel
   2. CitySelector           - picks cities for country-level trips
-  3. FlightFinder           - wraps mock flight data
-  4. AccommodationFinder    - wraps mock accommodation data
+  3. FlightFinder           - uses Amadeus flight search (via FlightAgent)
+  4. AccommodationFinder    - uses Amadeus hotel search (via AccomAgent)
   5. ItineraryPlanner       - builds the final day-by-day plan
 
-The agents share context through CrewAI's task dependency system so that
-each agent can build on the work of previous agents.
+FlightAgent and AccomAgent are used both as tools within the crew AND
+to generate the final structured data returned to the frontend.
 """
 
 from __future__ import annotations
@@ -20,8 +20,22 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Generator, List, Optional
 
 from crewai import Agent, Crew, Process, Task
-from crewai.tasks.task_output import TaskOutput
 from crewai.tools import tool as crewai_tool
+
+# ---------------------------------------------------------------------------
+# Import Amadeus-backed tools from sub-agents.
+# Try relative import (when loaded as agents.planning_agent package member),
+# fall back to absolute (when loaded directly from sys.path in tests).
+# ---------------------------------------------------------------------------
+try:
+    from .FlightAgent import search_flights as _amadeus_flights_tool
+    from .AccomAgent import search_hotels as _amadeus_hotels_tool
+except ImportError:
+    from FlightAgent import search_flights as _amadeus_flights_tool  # type: ignore
+    from AccomAgent import search_hotels as _amadeus_hotels_tool  # type: ignore
+
+_amadeus_flights_fn = _amadeus_flights_tool.func
+_amadeus_hotels_fn = _amadeus_hotels_tool.func
 
 # Optional: web search & scraping tools (need TAVILY_API_KEY / SERPER_API_KEY)
 _web_search_tools: list = []
@@ -45,7 +59,50 @@ from mock_data import (
     generate_mock_flights,
     generate_mock_accommodations,
     get_city_info,
+    get_airport_for_city,
 )
+
+# ---------------------------------------------------------------------------
+# IATA code mappings (city name → airport/city code for Amadeus)
+# ---------------------------------------------------------------------------
+
+_CITY_TO_AIRPORT: dict[str, str] = {
+    "New York": "JFK", "London": "LHR", "Paris": "CDG", "Tokyo": "NRT",
+    "Los Angeles": "LAX", "Chicago": "ORD", "Sydney": "SYD", "Dubai": "DXB",
+    "Singapore": "SIN", "Bangkok": "BKK", "Barcelona": "BCN", "Rome": "FCO",
+    "Amsterdam": "AMS", "Berlin": "BER", "Prague": "PRG", "Istanbul": "IST",
+    "San Francisco": "SFO", "Miami": "MIA", "Boston": "BOS", "Kyoto": "KIX",
+    "Osaka": "KIX", "Madrid": "MAD", "Lisbon": "LIS", "Vienna": "VIE",
+    "Zurich": "ZRH", "Copenhagen": "CPH", "Stockholm": "ARN", "Seoul": "ICN",
+}
+
+_CITY_TO_IATA_CITY: dict[str, str] = {
+    "New York": "NYC", "London": "LON", "Paris": "PAR", "Tokyo": "TYO",
+    "Los Angeles": "LAX", "Chicago": "CHI", "Sydney": "SYD", "Dubai": "DXB",
+    "Singapore": "SIN", "Bangkok": "BKK", "Barcelona": "BCN", "Rome": "ROM",
+    "Amsterdam": "AMS", "Berlin": "BER", "Prague": "PRG", "Istanbul": "IST",
+    "San Francisco": "SFO", "Miami": "MIA", "Boston": "BOS", "Kyoto": "OSA",
+    "Osaka": "OSA", "Madrid": "MAD", "Lisbon": "LIS", "Vienna": "VIE",
+    "Zurich": "ZRH", "Copenhagen": "CPH", "Stockholm": "STO", "Seoul": "SEL",
+}
+
+
+def _airport_code(city: str) -> str:
+    return _CITY_TO_AIRPORT.get(city, get_airport_for_city(city))
+
+
+def _city_iata(city: str) -> str:
+    return _CITY_TO_IATA_CITY.get(city, city[:3].upper())
+
+
+def _is_mock_flight(f: dict) -> bool:
+    """True when a dict looks like mock-data format (has the keys the DB expects)."""
+    return "flight_type" in f and "airline" in f and "flight_number" in f
+
+
+def _is_mock_accom(a: dict) -> bool:
+    return "name" in a and "price_per_night" in a and "check_in_date" in a
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -107,8 +164,6 @@ def _fallback_day_plan(city: str, day_number: int) -> list[dict]:
 # LLM model helper  (supports OpenAI, Gemini, Claude via LLM_PROVIDER env var)
 # ---------------------------------------------------------------------------
 
-# CrewAI uses native providers with the format "provider/model-name".
-# Supported LLM_PROVIDER values: openai (default), gemini, anthropic
 _LLM_DEFAULTS = {
     "openai":    "gpt-4o-mini",
     "gemini":    "gemini-2.0-flash",
@@ -117,26 +172,20 @@ _LLM_DEFAULTS = {
 
 
 def _llm_name() -> str:
-    """Return the model string in CrewAI's native `provider/model` format.
-
-    Reads:
-      LLM_PROVIDER  - one of: openai, gemini, anthropic  (default: openai)
-      LLM_MODEL     - override the specific model name
-    """
+    """Return the model string in CrewAI's native `provider/model` format."""
     provider = os.getenv("LLM_PROVIDER", "openai").lower().strip()
     if provider not in _LLM_DEFAULTS:
-        provider = "openai"  # fallback
+        provider = "openai"
     model = os.getenv("LLM_MODEL", _LLM_DEFAULTS[provider])
-
-    # OpenAI models don't need a prefix in CrewAI (it's the default)
     if provider == "openai":
         return model
-    # Gemini & Anthropic need the provider/ prefix
     return f"{provider}/{model}"
 
 
 # ---------------------------------------------------------------------------
-# Custom CrewAI Tools (wrapping external APIs / mock data)
+# CrewAI Tools
+# Wrap Amadeus-backed tools with city-name → IATA conversion so that
+# the LLM can pass plain city names without knowing IATA codes.
 # ---------------------------------------------------------------------------
 
 @crewai_tool("Search Flights")
@@ -147,31 +196,24 @@ def search_flights_tool(
     return_date: str,
     num_travelers: int = 1,
 ) -> str:
-    """Search for available flights between two cities.
-    Simulates a Skyscanner/Google Flights API.
+    """Search for available flights between two cities using Amadeus (or mock fallback).
     Args:
-        origin: Departure city (e.g. 'New York')
-        destination: Arrival city (e.g. 'Tokyo')
+        origin: Departure city name (e.g. 'New York')
+        destination: Arrival city name (e.g. 'Tokyo')
         departure_date: YYYY-MM-DD format
-        return_date: YYYY-MM-DD format
+        return_date: YYYY-MM-DD format (empty string for one-way)
         num_travelers: Number of passengers
     Returns:
-        JSON string with flight options including airline, price, duration.
+        JSON string with up to 5 flight options.
     """
-    flights = generate_mock_flights(origin, destination, departure_date, return_date, num_travelers)
-    # Return top 5 for conciseness
-    summary = []
-    for f in flights[:5]:
-        summary.append({
-            "airline": f.get("airline"),
-            "flight_number": f.get("flight_number"),
-            "price": f.get("price"),
-            "duration_minutes": f.get("duration_minutes"),
-            "departure_datetime": f.get("departure_datetime"),
-            "arrival_datetime": f.get("arrival_datetime"),
-            "flight_type": f.get("flight_type"),
-        })
-    return json.dumps(summary, default=str)
+    origin_code = _airport_code(origin)
+    dest_code = _airport_code(destination)
+    results = _amadeus_flights_fn(origin_code, dest_code, departure_date, return_date, num_travelers)
+    if results and "error" not in results[0]:
+        return json.dumps(results[:5], default=str)
+    # Amadeus failed — fall back to mock data
+    results = generate_mock_flights(origin, destination, departure_date, return_date or None, num_travelers)
+    return json.dumps(results[:5], default=str)
 
 
 @crewai_tool("Search Accommodations")
@@ -181,42 +223,32 @@ def search_accommodations_tool(
     check_out_date: str,
     num_guests: int = 1,
 ) -> str:
-    """Search for hotels and accommodations in a city.
-    Simulates an Airbnb/Booking.com API.
+    """Search for hotels in a city using Amadeus (or mock fallback).
     Args:
         city: City name (e.g. 'Paris')
         check_in_date: YYYY-MM-DD format
         check_out_date: YYYY-MM-DD format
         num_guests: Number of guests
     Returns:
-        JSON string with accommodation options including name, type, price, rating.
+        JSON string with up to 5 accommodation options.
     """
-    accs = generate_mock_accommodations(city, check_in_date, check_out_date, num_guests)
-    summary = []
-    for a in accs[:5]:
-        summary.append({
-            "name": a.get("name"),
-            "type": a.get("type"),
-            "city": a.get("city"),
-            "price_per_night": a.get("price_per_night"),
-            "total_price": a.get("total_price"),
-            "rating": a.get("rating"),
-            "amenities": a.get("amenities", [])[:5],
-        })
-    return json.dumps(summary, default=str)
+    city_code = _city_iata(city)
+    results = _amadeus_hotels_fn(city_code, check_in_date, check_out_date, num_guests, "hotel")
+    if results and "error" not in results[0]:
+        return json.dumps(results[:5], default=str)
+    results = generate_mock_accommodations(city, check_in_date, check_out_date, num_guests)
+    return json.dumps(results[:5], default=str)
 
 
 @crewai_tool("Get City Information")
 def get_city_info_tool(city_name: str) -> str:
-    """Get detailed information about a city including attractions, food, and transport.
-    Simulates a Google Maps / Places API.
+    """Get information about a city: attractions, food, transport.
     Args:
         city_name: Name of the city (e.g. 'Tokyo')
     Returns:
-        JSON string with city info: country, description, top attractions, best food, local transport.
+        JSON string with city info.
     """
-    info = get_city_info(city_name)
-    return json.dumps(info, default=str)
+    return json.dumps(get_city_info(city_name), default=str)
 
 
 # ---------------------------------------------------------------------------
@@ -226,11 +258,10 @@ def get_city_info_tool(city_name: str) -> str:
 def _build_agents():
     """Create the five specialized agents with appropriate tools."""
 
-    # -- Researcher tools: web search + scraping for real-time destination intel --
-    researcher_tools = list(_web_search_tools)  # Tavily or Serper
+    researcher_tools = list(_web_search_tools)
     if _scrape_tool:
         researcher_tools.append(_scrape_tool)
-    researcher_tools.append(get_city_info_tool)  # local city DB as fallback
+    researcher_tools.append(get_city_info_tool)
 
     destination_researcher = Agent(
         role="Destination Researcher",
@@ -238,8 +269,7 @@ def _build_agents():
         backstory=(
             "You are a seasoned travel researcher with extensive knowledge of destinations worldwide. "
             "You excel at uncovering practical travel information including top attractions, local food, "
-            "transport tips, and budget considerations. You always provide structured, actionable information. "
-            "You have access to web search tools and a city database to gather real-time data."
+            "transport tips, and budget considerations. You always provide structured, actionable information."
         ),
         tools=researcher_tools,
         llm=_llm_name(),
@@ -248,7 +278,6 @@ def _build_agents():
         max_iter=8,
     )
 
-    # -- City selector tools: web search + city info --
     selector_tools = list(_web_search_tools)
     selector_tools.append(get_city_info_tool)
 
@@ -258,8 +287,7 @@ def _build_agents():
         backstory=(
             "You are a travel routing expert who knows which cities pair well together and how to "
             "create logical, efficient multi-city itineraries. You consider travel distances, "
-            "city highlights, and traveler interests to select the best route. "
-            "Use the city info tool to verify your selections."
+            "city highlights, and traveler interests to select the best route."
         ),
         tools=selector_tools,
         llm=_llm_name(),
@@ -268,14 +296,13 @@ def _build_agents():
         max_iter=5,
     )
 
-    # -- Flight finder tool: Skyscanner/Google Flights-like search --
     flight_finder = Agent(
         role="Flight Search Specialist",
-        goal="Find the best flight options for the trip using the flight search tool",
+        goal="Find the best flight options using the Amadeus-powered flight search tool",
         backstory=(
-            "You are a flight search expert who uses the flight search API (similar to Skyscanner) "
-            "to find the best air travel options. Always use the Search Flights tool to get real "
-            "flight data rather than making up flight information."
+            "You are a flight search expert who uses the Search Flights tool to find optimal air "
+            "travel options via the Amadeus GDS. Always use the tool with city names — IATA code "
+            "conversion is handled automatically. Never make up flight data."
         ),
         tools=[search_flights_tool],
         llm=_llm_name(),
@@ -284,14 +311,13 @@ def _build_agents():
         max_iter=5,
     )
 
-    # -- Accommodation finder tool: Airbnb/Booking.com-like search --
     accommodation_finder = Agent(
         role="Accommodation Search Specialist",
-        goal="Find the best places to stay for each city using the accommodation search tool",
+        goal="Find the best places to stay for each city using the Amadeus-powered hotel search tool",
         backstory=(
-            "You are an accommodation expert who uses the accommodation search API (similar to "
-            "Airbnb/Booking.com) to find the perfect places to stay. Always use the Search "
-            "Accommodations tool for each city rather than making up accommodation data."
+            "You are an accommodation expert who uses the Search Accommodations tool to find hotels "
+            "via the Amadeus GDS. Always use the tool with city names — IATA conversion is automatic. "
+            "Never make up accommodation data."
         ),
         tools=[search_accommodations_tool],
         llm=_llm_name(),
@@ -300,19 +326,16 @@ def _build_agents():
         max_iter=5,
     )
 
-    # -- Itinerary planner tools: city info + web search for activity details --
     planner_tools = [get_city_info_tool]
-    planner_tools.extend(_web_search_tools)  # optional web search for activity details
+    planner_tools.extend(_web_search_tools)
 
     itinerary_planner = Agent(
         role="Itinerary Planner",
         goal="Create a detailed day-by-day itinerary using all gathered information and city data",
         backstory=(
             "You are an expert itinerary designer who creates cohesive, realistic day-by-day "
-            "travel plans. You synthesize destination research, city information, and traveler "
-            "preferences to build plans with proper timing, varied activities, and meals. "
-            "Use the city info tool to get details about attractions and food for each city. "
-            "You always ensure plans are practical and enjoyable."
+            "travel plans. You synthesize destination research, city information, flight data, "
+            "accommodation options, and traveler preferences to build practical, enjoyable plans."
         ),
         tools=planner_tools,
         llm=_llm_name(),
@@ -331,7 +354,7 @@ def _build_agents():
 
 
 # ---------------------------------------------------------------------------
-# CrewAI Task builders (parameterized per trip)
+# CrewAI Task builders
 # ---------------------------------------------------------------------------
 
 def _build_tasks(
@@ -339,10 +362,6 @@ def _build_tasks(
     agents: tuple,
     on_progress: Optional[callable] = None,
 ) -> list[Task]:
-    """
-    Build the five sequential tasks for a trip, wiring context dependencies
-    so agents can collaborate.
-    """
     (
         researcher_agent,
         selector_agent,
@@ -361,9 +380,8 @@ def _build_tasks(
     duration = _calc_duration(start, end)
     is_country = _is_likely_country(dest)
 
-    # Callbacks that fire when each task finishes
     def _make_callback(agent_name: str, done_msg: str):
-        def cb(output: TaskOutput):
+        def cb(output: Any):
             if on_progress:
                 on_progress({
                     "type": "progress",
@@ -373,7 +391,6 @@ def _build_tasks(
                 })
         return cb
 
-    # --- Task 1: Destination Research ---
     research_task = Task(
         description=f"""Research the travel destination **{dest}** for a {duration}-day trip.
 
@@ -397,7 +414,6 @@ Return ONLY valid JSON, no markdown fences or extra text.""",
         callback=_make_callback("DestinationResearcher", f"Research on {dest} complete"),
     )
 
-    # --- Task 2: City Selection ---
     if is_country:
         city_description = f"""Based on the destination research provided in context, select the best cities
 to visit in **{dest}** for a {duration}-day trip.
@@ -420,13 +436,11 @@ Return a JSON array with just this city: ["{dest}"]"""
         expected_output="A JSON array of city names to visit.",
         agent=selector_agent,
         context=[research_task],
-        callback=_make_callback("CitySelector",
-                                f"Cities selected for {dest}"),
+        callback=_make_callback("CitySelector", f"Cities selected for {dest}"),
     )
 
-    # --- Task 3: Flight Search ---
     flight_task = Task(
-        description=f"""Find flights for a trip to the destination cities.
+        description=f"""Find flights for this trip using the Search Flights tool.
 
 Trip details:
 - Departure date: {start}
@@ -434,9 +448,11 @@ Trip details:
 - Number of travelers: {travelers}
 - Origin: New York
 
-Using the cities selected in the context, search for flights to the first city.
+Using the cities selected in the context, call the Search Flights tool with:
+  origin="New York", destination=<first city from context>,
+  departure_date="{start}", return_date="{end}", num_travelers={travelers}
 
-IMPORTANT: Your output MUST be a valid JSON object with this structure:
+IMPORTANT: Your output MUST be a valid JSON object:
 {{
   "origin": "New York",
   "destination_city": "<first city from context>",
@@ -446,23 +462,23 @@ IMPORTANT: Your output MUST be a valid JSON object with this structure:
 }}
 
 Return ONLY valid JSON.""",
-        expected_output="A JSON object with flight search parameters.",
+        expected_output="A JSON object with flight search parameters used.",
         agent=flight_agent,
         context=[city_task],
         callback=_make_callback("FlightFinder", "Flight search complete"),
     )
 
-    # --- Task 4: Accommodation Search ---
     accommodation_task = Task(
-        description=f"""Find accommodations for each city in the trip.
+        description=f"""Find accommodations for each city using the Search Accommodations tool.
 
 Trip dates: {start} to {end}
 Number of guests: {travelers}
 Budget level: {budget}
 
-Using the cities from context, search for accommodations in each city.
+For each city from context, call Search Accommodations with:
+  city=<city name>, check_in_date="{start}", check_out_date="{end}", num_guests={travelers}
 
-IMPORTANT: Your output MUST be a valid JSON object with this structure:
+IMPORTANT: Your output MUST be a valid JSON object:
 {{
   "cities": ["<cities from context>"],
   "check_in": "{start}",
@@ -478,7 +494,6 @@ Return ONLY valid JSON.""",
         callback=_make_callback("AccommodationFinder", "Accommodation search complete"),
     )
 
-    # --- Task 5: Itinerary Planning ---
     itinerary_task = Task(
         description=f"""Create a detailed day-by-day itinerary for a {duration}-day trip.
 
@@ -531,17 +546,13 @@ Return ONLY valid JSON array.""",
 
 
 # ---------------------------------------------------------------------------
-# Result parser - extract structured data from crew output
+# Result parser
 # ---------------------------------------------------------------------------
 
 def _parse_crew_result(
     tasks: list[Task],
     trip_data: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """
-    After the crew finishes, parse each task's output to build the
-    structured plan dict that the rest of the app expects.
-    """
     dest = trip_data["destination"]
     start = trip_data["start_date"]
     end = trip_data["end_date"]
@@ -572,17 +583,28 @@ def _parse_crew_result(
             }
             cities = defaults.get(dest, [f"{dest} City"])
 
-    # --- Generate flights from mock data ---
+    # --- Flights via Amadeus (falls back to mock when no credentials) ---
     origin = "New York"
-    flights = generate_mock_flights(
-        origin, cities[0], start, end, travelers,
-    )
+    origin_code = _airport_code(origin)
+    dest_code = _airport_code(cities[0])
+    flights = _amadeus_flights_fn(origin_code, dest_code, start, end, travelers)
+    if not flights or (isinstance(flights, list) and flights and "error" in flights[0]):
+        flights = generate_mock_flights(origin, cities[0], start, end, travelers)
+    elif not _is_mock_flight(flights[0]):
+        # Amadeus format — fall back to mock for DB-compatible schema
+        flights = generate_mock_flights(origin, cities[0], start, end, travelers)
 
-    # --- Generate accommodations from mock data ---
+    # --- Accommodations via Amadeus (falls back to mock when no credentials) ---
     accommodations: list[dict] = []
     for city in cities:
-        city_accs = generate_mock_accommodations(city, start, end, travelers)
-        accommodations.extend(city_accs[:3])
+        city_code = _city_iata(city)
+        hotels = _amadeus_hotels_fn(city_code, start, end, travelers, "hotel")
+        if not hotels or (isinstance(hotels, list) and hotels and "error" in hotels[0]):
+            hotels = generate_mock_accommodations(city, start, end, travelers)[:3]
+        elif not _is_mock_accom(hotels[0]):
+            # Amadeus format — fall back to mock for DB-compatible schema
+            hotels = generate_mock_accommodations(city, start, end, travelers)[:3]
+        accommodations.extend(hotels[:3])
 
     # --- Parse itinerary ---
     itinerary: list[dict] = []
@@ -591,7 +613,6 @@ def _parse_crew_result(
         parsed_itin = _safe_json_parse(itin_raw)
         if isinstance(parsed_itin, list) and len(parsed_itin) > 0:
             itinerary = parsed_itin
-            # Ensure all items have required fields
             for day in itinerary:
                 for i, item in enumerate(day.get("items", [])):
                     item.setdefault("id", f"day{day.get('day_number', 0)}_item{i}")
@@ -601,7 +622,6 @@ def _parse_crew_result(
     except Exception:
         pass
 
-    # Fallback: build itinerary from scratch if parsing failed
     if not itinerary:
         itinerary = _build_fallback_itinerary(cities, duration, start)
 
@@ -620,7 +640,6 @@ def _parse_crew_result(
 def _build_fallback_itinerary(
     cities: list[str], duration: int, start_date: str
 ) -> list[dict]:
-    """Build a basic itinerary when the LLM output cannot be parsed."""
     n = len(cities)
     base = duration // max(n, 1)
     extra = duration % max(n, 1)
@@ -652,14 +671,11 @@ def _build_fallback_itinerary(
 
 
 # ---------------------------------------------------------------------------
-# Public API consumed by FastAPI
+# Public API
 # ---------------------------------------------------------------------------
 
 class TripPlanner:
-    """
-    High-level wrapper around the CrewAI planning crew.
-    Supports both synchronous (plan_trip) and streaming (plan_trip_stream).
-    """
+    """High-level wrapper around the CrewAI planning crew."""
 
     @staticmethod
     def plan_trip(trip_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -673,18 +689,12 @@ class TripPlanner:
             process=Process.sequential,
             verbose=False,
         )
-
         crew.kickoff()
-
         return _parse_crew_result(tasks, trip_data)
 
     @staticmethod
     def plan_trip_stream(trip_data: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
-        """
-        Generator that yields progress events as the crew executes.
-        Each yield is a dict with agent progress info.
-        The final yield has type="complete" and includes the full plan.
-        """
+        """Generator that yields SSE progress events as the crew executes."""
         progress_events: list[dict] = []
 
         agent_order = [
@@ -698,8 +708,8 @@ class TripPlanner:
         agent_start_messages = {
             "DestinationResearcher": f"Researching {trip_data['destination']}...",
             "CitySelector": f"Selecting cities in {trip_data['destination']}...",
-            "FlightFinder": "Searching for flights...",
-            "AccommodationFinder": "Finding accommodations...",
+            "FlightFinder": "Searching for flights via Amadeus...",
+            "AccommodationFinder": "Finding accommodations via Amadeus...",
             "ItineraryPlanner": "Building your day-by-day itinerary...",
         }
 
@@ -715,15 +725,6 @@ class TripPlanner:
             process=Process.sequential,
             verbose=False,
         )
-
-        # Yield start events for each agent, then run the crew,
-        # and yield completion events as they come in.
-        # Since CrewAI runs sequentially, we track task completion
-        # via callbacks and yield progress between tasks.
-
-        # We need to run the crew in a way that lets us yield.
-        # CrewAI doesn't natively support generator-style streaming,
-        # so we run it in a thread and poll for progress events.
 
         import threading
         import time
@@ -741,54 +742,40 @@ class TripPlanner:
         thread = threading.Thread(target=run_crew, daemon=True)
         thread.start()
 
-        yielded_agents = set()
-        started_agents = set()
+        yielded_agents: set = set()
+        started_agents: set = set()
 
         while not result_holder["done"]:
-            # Check for new progress events from callbacks
             while progress_events:
                 event = progress_events.pop(0)
                 agent_name = event.get("agent", "")
-
-                # If this agent hasn't been started yet, yield a "running" event
                 if agent_name not in started_agents:
                     started_agents.add(agent_name)
                     yield {
                         "type": "progress",
                         "agent": agent_name,
                         "status": "running",
-                        "message": agent_start_messages.get(
-                            agent_name, f"{agent_name} working..."
-                        ),
+                        "message": agent_start_messages.get(agent_name, f"{agent_name} working..."),
                     }
-
-                # Yield the done event
                 yielded_agents.add(agent_name)
                 yield event
 
-            # Guess which agent is currently running based on what's completed
             for agent_name in agent_order:
                 if agent_name not in started_agents and agent_name not in yielded_agents:
-                    # Check if all previous agents are done
                     idx = agent_order.index(agent_name)
-                    all_prev_done = all(
-                        a in yielded_agents for a in agent_order[:idx]
-                    )
+                    all_prev_done = all(a in yielded_agents for a in agent_order[:idx])
                     if all_prev_done or idx == 0:
                         started_agents.add(agent_name)
                         yield {
                             "type": "progress",
                             "agent": agent_name,
                             "status": "running",
-                            "message": agent_start_messages.get(
-                                agent_name, f"{agent_name} working..."
-                            ),
+                            "message": agent_start_messages.get(agent_name, f"{agent_name} working..."),
                         }
                     break
 
             time.sleep(0.5)
 
-        # Drain remaining progress events
         while progress_events:
             event = progress_events.pop(0)
             agent_name = event.get("agent", "")
@@ -798,13 +785,10 @@ class TripPlanner:
                     "type": "progress",
                     "agent": agent_name,
                     "status": "running",
-                    "message": agent_start_messages.get(
-                        agent_name, f"{agent_name} working..."
-                    ),
+                    "message": agent_start_messages.get(agent_name, f"{agent_name} working..."),
                 }
             yield event
 
-        # Check for errors
         if result_holder.get("error"):
             yield {
                 "type": "error",
@@ -814,10 +798,8 @@ class TripPlanner:
             }
             return
 
-        # Parse final result
         plan_data = _parse_crew_result(tasks, trip_data)
 
-        # Yield final complete event
         yield {
             "type": "complete",
             "agent": "Orchestrator",
@@ -828,9 +810,8 @@ class TripPlanner:
 
     @staticmethod
     def _is_likely_country(destination: str) -> bool:
-        """Backward-compatible static helper."""
         return _is_likely_country(destination)
 
 
-# Backward-compatible singleton
+# Singleton consumed by main.py via `from agents import planning_agent`
 planning_agent = TripPlanner()

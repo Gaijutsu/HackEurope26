@@ -5,7 +5,8 @@ from datetime import date
 
 # Project root — needed for PlanningInfo, mock_data, etc.
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# agents/ subdir — imported directly to avoid collision with root-level agents.py
+# agents/ subdir — imported directly so FlightAgent, AccomAgent, planning_agent
+# can be imported by name in tests without going through the package.
 _agents_dir = os.path.join(_root, "agents")
 for _p in (_root, _agents_dir):
     if _p not in sys.path:
