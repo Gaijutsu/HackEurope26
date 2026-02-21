@@ -64,6 +64,8 @@ export default function PlanForm() {
     const downvotedIds = downvotedParam ? downvotedParam.split(',').filter(Boolean) : []
     const initialVibe = buildVibeText(upvotedIds, downvotedIds)
 
+    const today = new Date().toISOString().split('T')[0]
+
     const [form, setForm] = useState({
         vibe: initialVibe,
         startDate: '',
@@ -80,7 +82,17 @@ export default function PlanForm() {
 
     const handleChange = (e) => {
         const { name, value } = e.target
-        setForm((prev) => ({ ...prev, [name]: value }))
+        setForm((prev) => {
+            const next = { ...prev, [name]: value }
+            // If departure date is changed to be after the current return date,
+            // or if return date is not set, sync return date to departure
+            if (name === 'startDate') {
+                if (!prev.endDate || value > prev.endDate) {
+                    next.endDate = value
+                }
+            }
+            return next
+        })
         // Clear error when user types
         if (errors[name]) {
             setErrors((prev) => ({ ...prev, [name]: '' }))
@@ -94,6 +106,18 @@ export default function PlanForm() {
         if (!form.vibe.trim()) newErrors.vibe = 'Please describe your vibe'
         if (!form.budget) newErrors.budget = 'Please enter your budget'
         if (!form.accommodation) newErrors.accommodation = 'Please select where you will stay'
+
+        if (!form.startDate) {
+            newErrors.startDate = 'Please select a departure date'
+        } else if (form.startDate < today) {
+            newErrors.startDate = 'Departure date cannot be in the past'
+        }
+
+        if (!form.endDate) {
+            newErrors.endDate = 'Please select a return date'
+        } else if (form.endDate < form.startDate) {
+            newErrors.endDate = 'Return date cannot be before departure'
+        }
 
         if (Object.keys(newErrors).length > 0) {
             setErrors(newErrors)
@@ -192,11 +216,13 @@ export default function PlanForm() {
                                     id="startDate"
                                     type="date"
                                     name="startDate"
-                                    className="plan__input"
+                                    className={`plan__input ${errors.startDate ? 'plan__input--error' : ''}`}
                                     value={form.startDate}
                                     onChange={handleChange}
+                                    min={today}
                                     required
                                 />
+                                {errors.startDate && <span className="plan__error-text">{errors.startDate}</span>}
                             </div>
                             <div className="plan__field">
                                 <div className="plan__label-row">
@@ -207,11 +233,13 @@ export default function PlanForm() {
                                     id="endDate"
                                     type="date"
                                     name="endDate"
-                                    className="plan__input"
+                                    className={`plan__input ${errors.endDate ? 'plan__input--error' : ''}`}
                                     value={form.endDate}
                                     onChange={handleChange}
+                                    min={form.startDate || today}
                                     required
                                 />
+                                {errors.endDate && <span className="plan__error-text">{errors.endDate}</span>}
                             </div>
                         </div>
                     </div>
