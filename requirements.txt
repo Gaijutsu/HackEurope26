@@ -15,6 +15,9 @@ crewai[tools]>=0.95.0
 # Amadeus flight & hotel API
 amadeus>=9.0.0
 
+# Testing
+pytest>=8.0.0
+
 # Web search tool
 tavily-python>=0.5.0
 
@@ -32,3 +35,4 @@ httpx>=0.26.0
 # Environment
 python-dotenv>=1.0.0
 
+dataclass_json
