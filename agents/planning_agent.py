@@ -1009,6 +1009,9 @@ class TripPlanner:
             tasks=tasks,
             process=Process.sequential,
             verbose=VERBOSE,
+            tracing=TRACING,
+            memory=True,
+            cache=True,
         )
 
         import threading
