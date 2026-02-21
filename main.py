@@ -830,6 +830,24 @@ def search_cities(q: str):
         for c in cities
     ]
 
+# Vibe endpoint
+class VibeRequest(BaseModel):
+    upvoted: List[str]
+    downvoted: List[str] = []
+
+@app.post("/vibe")
+def get_vibe(request: VibeRequest):
+    """Generate a short trip-vibe description from upvoted/downvoted image paths."""
+    from vibe_generator import generate_vibe
+    try:
+        vibe = generate_vibe(request.upvoted, request.downvoted)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=400, detail=f"Image not found: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Vibe generation failed: {e}")
+    return {"vibe": vibe}
+
+
 # Health check
 @app.get("/health")
 def health_check():
