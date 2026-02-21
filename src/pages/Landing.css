@@ -282,3 +282,99 @@
         padding: 4px 4px 4px 18px;
     }
 }
+
+/* Submit button */
+.landing__submit-wrap {
+    display: flex;
+    justify-content: center;
+    margin-top: 3rem;
+    padding-bottom: 1rem;
+}
+
+.landing__submit-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.9rem 2.2rem;
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: white;
+    background: linear-gradient(135deg, var(--accent, #6c63ff) 0%, var(--accent-alt, #a855f7) 100%);
+    border: none;
+    border-radius: 9999px;
+    cursor: pointer;
+    box-shadow:
+        0 4px 14px rgba(108, 99, 255, 0.35),
+        0 1px 3px rgba(0, 0, 0, 0.1);
+    transition:
+        transform 0.2s ease,
+        box-shadow 0.2s ease,
+        filter 0.2s ease;
+}
+
+.landing__submit-btn:hover {
+    transform: translateY(-2px) scale(1.03);
+    box-shadow:
+        0 6px 22px rgba(108, 99, 255, 0.45),
+        0 2px 6px rgba(0, 0, 0, 0.12);
+    filter: brightness(1.08);
+}
+
+.landing__submit-btn:active {
+    transform: translateY(0) scale(0.98);
+    box-shadow:
+        0 2px 8px rgba(108, 99, 255, 0.3);
+}
+
+.landing__submit-btn svg {
+    transition: transform 0.2s ease;
+}
+
+.landing__submit-btn:hover svg {
+    transform: translateX(3px);
+}
+/* Submit button */
+.landing__submit-wrap {
+    display: flex;
+    justify-content: center;
+    margin-top: 3rem;
+    padding-bottom: 1rem;
+}
+
+.landing__submit-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 18px 40px;
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: white;
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent-deep) 100%);
+    border: none;
+    border-radius: var(--radius-xl);
+    cursor: pointer;
+    box-shadow: var(--shadow-md);
+    transition:
+        box-shadow var(--transition-fast),
+        transform var(--transition-fast);
+}
+
+.landing__submit-btn:hover {
+    box-shadow: var(--shadow-lg), var(--shadow-glow);
+    transform: translateY(-2px) scale(1.02);
+}
+
+.landing__submit-btn:active {
+    transform: translateY(0) scale(0.98);
+}
+
+.landing__submit-btn svg {
+    transition: transform 0.2s ease;
+}
+
+.landing__submit-btn:hover svg {
+    transform: translateX(3px);
+}

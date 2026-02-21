@@ -18,45 +18,50 @@ const cardVariants = {
     },
 }
 
-export default function MoodBoardCard({ mood, onClick }) {
+export default function MoodBoardCard({ mood, voteState, onUpvote, onDownvote, onClick }) {
     return (
-        <motion.button
+        <motion.div
             className="mood-card"
             variants={cardVariants}
             whileHover={{ y: -6, scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
             onClick={onClick}
-            aria-label={`Select ${mood.title} mood board`}
+            aria-label={`Mood board ${mood.id}`}
         >
             <div className="mood-card__image-wrap">
                 <img
                     src={mood.image}
-                    alt={mood.title}
+                    alt={`Mood ${mood.id}`}
                     className="mood-card__image"
                     loading="lazy"
                 />
                 <div className="mood-card__overlay" />
             </div>
-            <div className="mood-card__info">
-                <h3 className="mood-card__title">{mood.title}</h3>
-                <p className="mood-card__subtitle">{mood.subtitle}</p>
-            </div>
-            <div className="mood-card__select-hint">
-                <span>Select this vibe</span>
-                <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
+            <div className="mood-card__votes">
+                <button
+                    className={`mood-card__vote-btn mood-card__vote-btn--up ${voteState === 'upvoted' ? 'mood-card__vote-btn--active' : ''}`}
+                    onClick={(e) => {
+                        e.stopPropagation()
+                        onUpvote()
+                    }}
+                    aria-label="Upvote"
                 >
-                    <path d="M5 12h14" />
-                    <path d="m12 5 7 7-7 7" />
-                </svg>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="m18 15-6-6-6 6" />
+                    </svg>
+                </button>
+                <button
+                    className={`mood-card__vote-btn mood-card__vote-btn--down ${voteState === 'downvoted' ? 'mood-card__vote-btn--down-active' : ''}`}
+                    onClick={(e) => {
+                        e.stopPropagation()
+                        onDownvote()
+                    }}
+                    aria-label="Downvote"
+                >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="m6 9 6 6 6-6" />
+                    </svg>
+                </button>
             </div>
-        </motion.button>
+        </motion.div>
     )
 }
