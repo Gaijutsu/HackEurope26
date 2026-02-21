@@ -14,26 +14,26 @@ A multi-agent trip planning system built with **CrewAI** for a hackathon. Five s
 
 ## Agent Architecture
 
-| Agent | Role | Tools |
-|---|---|---|
-| **DestinationResearcher** | Web research on destinations | TavilySearch, ScrapeWebsite, CityInfo |
-| **CitySelector** | Picks optimal cities for country trips | TavilySearch, CityInfo |
-| **FlightFinder** | Searches for flight options | SearchFlights (Skyscanner-like mock) |
-| **AccommodationFinder** | Finds places to stay | SearchAccommodations (Airbnb-like mock) |
-| **ItineraryPlanner** | Builds the day-by-day plan | CityInfo, TavilySearch |
+| Agent                     | Role                                   | Tools                                   |
+| ------------------------- | -------------------------------------- | --------------------------------------- |
+| **DestinationResearcher** | Web research on destinations           | TavilySearch, ScrapeWebsite, CityInfo   |
+| **CitySelector**          | Picks optimal cities for country trips | TavilySearch, CityInfo                  |
+| **FlightFinder**          | Searches for flight options            | SearchFlights (Skyscanner-like mock)    |
+| **AccommodationFinder**   | Finds places to stay                   | SearchAccommodations (Airbnb-like mock) |
+| **ItineraryPlanner**      | Builds the day-by-day plan             | CityInfo, TavilySearch                  |
 
 Agents pass context through CrewAI's task dependency system - the ItineraryPlanner receives output from all four previous agents to create a cohesive plan.
 
 ## Tech Stack
 
-| Component | Technology |
-|---|---|
-| Agent Framework | CrewAI |
-| LLM Providers | OpenAI, Google Gemini, Anthropic Claude |
-| Backend | FastAPI + SSE streaming |
-| Frontend | Streamlit |
-| Database | SQLite + SQLAlchemy |
-| Web Search | Tavily or Serper (optional) |
+| Component       | Technology                              |
+| --------------- | --------------------------------------- |
+| Agent Framework | CrewAI                                  |
+| LLM Providers   | OpenAI, Google Gemini, Anthropic Claude |
+| Backend         | FastAPI + SSE streaming                 |
+| Frontend        | Streamlit                               |
+| Database        | SQLite + SQLAlchemy                     |
+| Web Search      | Tavily or Serper (optional)             |
 
 ## Quick Start
 
@@ -56,13 +56,14 @@ cp .env.example .env
 
 Then edit `.env` and set **one** of these depending on your provider:
 
-| Provider | Env Vars to Set |
-|---|---|
-| **OpenAI** (default) | `OPENAI_API_KEY=sk-...` |
-| **Google Gemini** | `LLM_PROVIDER=gemini` + `GEMINI_API_KEY=...` |
+| Provider             | Env Vars to Set                                    |
+| -------------------- | -------------------------------------------------- |
+| **OpenAI** (default) | `OPENAI_API_KEY=sk-...`                            |
+| **Google Gemini**    | `LLM_PROVIDER=gemini` + `GEMINI_API_KEY=...`       |
 | **Anthropic Claude** | `LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY=...` |
 
 Default models per provider:
+
 - OpenAI: `gpt-4o-mini`
 - Gemini: `gemini-2.0-flash`
 - Claude: `claude-sonnet-4-20250514`
@@ -72,6 +73,7 @@ Override with `LLM_MODEL=your-model-name` if needed.
 ### 3. Start everything
 
 **Option A - One command:**
+
 ```bash
 bash start.sh
 ```
@@ -79,6 +81,7 @@ bash start.sh
 **Option B - Manual (two terminals):**
 
 Terminal 1 (backend):
+
 ```bash
 source .venv/bin/activate
 python main.py
@@ -86,6 +89,7 @@ python main.py
 ```
 
 Terminal 2 (frontend):
+
 ```bash
 source .venv/bin/activate
 cd streamlit_app
@@ -104,13 +108,13 @@ streamlit run app.py
 
 **Yes, the system works fully with mock data and requires NO external API keys beyond an LLM key.** Here's what happens:
 
-| Component | With API Key | Without API Key |
-|---|---|---|
-| **LLM** (required) | Full agent reasoning | Won't start without at least one LLM key |
-| **Flights** | Mock data always | Mock data always |
-| **Accommodations** | Mock data always | Mock data always |
-| **City Info** | Built-in database | Built-in database |
-| **Web Search** | Live Tavily/Serper results | Agents use LLM knowledge only |
+| Component          | With API Key               | Without API Key                          |
+| ------------------ | -------------------------- | ---------------------------------------- |
+| **LLM** (required) | Full agent reasoning       | Won't start without at least one LLM key |
+| **Flights**        | Mock data always           | Mock data always                         |
+| **Accommodations** | Mock data always           | Mock data always                         |
+| **City Info**      | Built-in database          | Built-in database                        |
+| **Web Search**     | Live Tavily/Serper results | Agents use LLM knowledge only            |
 
 **Minimum to run:** Just one LLM API key (`OPENAI_API_KEY`, `GEMINI_API_KEY`, or `ANTHROPIC_API_KEY`).
 
@@ -132,21 +136,21 @@ Without these, the DestinationResearcher agent still works - it just relies on t
 
 ## API Endpoints
 
-| Endpoint | Method | Description |
-|---|---|---|
-| `/auth/register` | POST | Create account |
-| `/auth/login` | POST | Login |
-| `/trips` | GET | List trips |
-| `/trips` | POST | Create trip |
-| `/trips/{id}/plan` | POST | Run planning (sync) |
-| `/trips/{id}/plan/stream` | GET | Run planning (SSE stream) |
-| `/trips/{id}/plan/status` | GET | Check planning status |
-| `/trips/{id}/itinerary` | GET | Get day-by-day itinerary |
-| `/trips/{id}/flights` | GET | Get flight options |
-| `/trips/{id}/accommodations` | GET | Get accommodation options |
-| `/trips/{id}/itinerary/items/{id}/delay` | PUT | Delay item to another day |
-| `/search/cities` | GET | Search city database |
-| `/health` | GET | Health check (shows LLM provider) |
+| Endpoint                                 | Method | Description                       |
+| ---------------------------------------- | ------ | --------------------------------- |
+| `/auth/register`                         | POST   | Create account                    |
+| `/auth/login`                            | POST   | Login                             |
+| `/trips`                                 | GET    | List trips                        |
+| `/trips`                                 | POST   | Create trip                       |
+| `/trips/{id}/plan`                       | POST   | Run planning (sync)               |
+| `/trips/{id}/plan/stream`                | GET    | Run planning (SSE stream)         |
+| `/trips/{id}/plan/status`                | GET    | Check planning status             |
+| `/trips/{id}/itinerary`                  | GET    | Get day-by-day itinerary          |
+| `/trips/{id}/flights`                    | GET    | Get flight options                |
+| `/trips/{id}/accommodations`             | GET    | Get accommodation options         |
+| `/trips/{id}/itinerary/items/{id}/delay` | PUT    | Delay item to another day         |
+| `/search/cities`                         | GET    | Search city database              |
+| `/health`                                | GET    | Health check (shows LLM provider) |
 
 ## Project Structure
 
