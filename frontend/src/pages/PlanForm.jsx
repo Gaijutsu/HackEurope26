@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
+import { useAuth } from '../contexts/AuthContext'
+import * as api from '../api'
 import './PlanForm.css'
 
 const MOOD_DATA = {
@@ -12,6 +14,17 @@ const MOOD_DATA = {
 
 const ACCOMMODATION_TYPES = ['Hotel', 'Hostel', 'Airbnb', 'Resort', 'Camping', 'Boutique Stay']
 const FOOD_OPTIONS = ['No restrictions', 'Vegetarian', 'Vegan', 'Gluten-free', 'Halal', 'Kosher']
+
+const INTEREST_OPTIONS = [
+    'Culture', 'Food', 'Nature', 'History', 'Art', 'Nightlife',
+    'Shopping', 'Adventure', 'Relaxation', 'Photography'
+]
+
+const BUDGET_LEVELS = [
+    { value: 'budget', label: 'Budget', desc: '$50–150/day' },
+    { value: 'mid', label: 'Mid-Range', desc: '$150–300/day' },
+    { value: 'luxury', label: 'Luxury', desc: '$300+/day' },
+]
 
 const pageVariants = {
     initial: { opacity: 0, y: 40 },
@@ -53,11 +66,12 @@ function buildVibeText(upvotedIds, downvotedIds) {
 export default function PlanForm() {
     const [searchParams] = useSearchParams()
     const navigate = useNavigate()
+    const { user, isAuthenticated } = useAuth()
+
     const destination = searchParams.get('destination') || 'Your destination'
     const moodId = searchParams.get('mood') || '1'
     const mood = MOOD_DATA[moodId] || MOOD_DATA[1]
 
-    // Build initial vibe from URL params (populated by "Continue with your vibes")
     const upvotedParam = searchParams.get('upvoted') || ''
     const downvotedParam = searchParams.get('downvoted') || ''
     const upvotedIds = upvotedParam ? upvotedParam.split(',').filter(Boolean) : []
@@ -70,22 +84,22 @@ export default function PlanForm() {
         vibe: initialVibe,
         startDate: '',
         endDate: '',
-        budget: '',
+        budget: 'mid',
         accommodation: '',
         foodRequirements: '',
         travelers: '1',
         notes: '',
+        interests: ['Culture', 'Food'],
     })
 
     const [submitted, setSubmitted] = useState(false)
+    const [submitting, setSubmitting] = useState(false)
     const [errors, setErrors] = useState({})
 
     const handleChange = (e) => {
         const { name, value } = e.target
         setForm((prev) => {
             const next = { ...prev, [name]: value }
-            // If departure date is changed to be after the current return date,
-            // or if return date is not set, sync return date to departure
             if (name === 'startDate') {
                 if (!prev.endDate || value > prev.endDate) {
                     next.endDate = value
@@ -93,18 +107,25 @@ export default function PlanForm() {
             }
             return next
         })
-        // Clear error when user types
         if (errors[name]) {
             setErrors((prev) => ({ ...prev, [name]: '' }))
         }
     }
 
-    const handleSubmit = (e) => {
+    const toggleInterest = (interest) => {
+        setForm((prev) => ({
+            ...prev,
+            interests: prev.interests.includes(interest)
+                ? prev.interests.filter((i) => i !== interest)
+                : [...prev.interests, interest],
+        }))
+    }
+
+    const handleSubmit = async (e) => {
         e.preventDefault()
 
         const newErrors = {}
         if (!form.vibe.trim()) newErrors.vibe = 'Please describe your vibe'
-        if (!form.budget) newErrors.budget = 'Please enter your budget'
         if (!form.accommodation) newErrors.accommodation = 'Please select where you will stay'
 
         if (!form.startDate) {
@@ -121,13 +142,51 @@ export default function PlanForm() {
 
         if (Object.keys(newErrors).length > 0) {
             setErrors(newErrors)
-            // Scroll to first error
             const firstError = Object.keys(newErrors)[0]
             document.getElementById(firstError)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
             return
         }
 
-        setSubmitted(true)
+        if (!isAuthenticated) {
+            navigate('/login')
+            return
+        }
+
+        setSubmitting(true)
+
+        try {
+            const dietaryRestrictions = form.foodRequirements && form.foodRequirements !== 'No restrictions'
+                ? [form.foodRequirements]
+                : []
+
+            const tripData = {
+                title: `Trip to ${destination}`,
+                destination: destination,
+                start_date: form.startDate,
+                end_date: form.endDate,
+                num_travelers: parseInt(form.travelers) || 1,
+                interests: [...form.interests, form.vibe].filter(Boolean),
+                dietary_restrictions: dietaryRestrictions,
+                budget_level: form.budget,
+            }
+
+            const result = await api.createTrip(user.id, tripData)
+            setSubmitted(true)
+
+            setTimeout(() => {
+                navigate(`/trips/${result.id}/planning`)
+            }, 1500)
+        } catch (err) {
+            setErrors({ submit: err.message || 'Failed to create trip' })
+            setSubmitting(false)
+        }
+    }
+
+    let tripDuration = null
+    if (form.startDate && form.endDate && form.endDate >= form.startDate) {
+        const start = new Date(form.startDate)
+        const end = new Date(form.endDate)
+        tripDuration = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1
     }
 
     return (
@@ -138,11 +197,9 @@ export default function PlanForm() {
             animate="animate"
             exit="exit"
         >
-            {/* Decorative orbs */}
             <div className="plan__bg-orb plan__bg-orb--1" />
             <div className="plan__bg-orb plan__bg-orb--2" />
 
-            {/* Back navigation */}
             <motion.button
                 className="plan__back"
                 onClick={() => navigate('/')}
@@ -150,23 +207,13 @@ export default function PlanForm() {
                 whileHover={{ x: -4 }}
                 whileTap={{ scale: 0.97 }}
             >
-                <svg
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="m12 19-7-7 7-7" />
                     <path d="M19 12H5" />
                 </svg>
                 <span>Back to vibes</span>
             </motion.button>
 
-            {/* Header with mood context */}
             <motion.header className="plan__header" variants={itemVariants}>
                 <div className="plan__mood-preview">
                     <img src={mood.image} alt={mood.title} className="plan__mood-image" />
@@ -182,9 +229,12 @@ export default function PlanForm() {
                 </div>
             </motion.header>
 
-            {/* Form */}
             {!submitted ? (
                 <motion.form className="plan__form" onSubmit={handleSubmit} variants={itemVariants}>
+                    {errors.submit && (
+                        <div className="plan__error-banner">{errors.submit}</div>
+                    )}
+
                     {/* Vibe */}
                     <div className="plan__section">
                         <div className="plan__label-row">
@@ -242,6 +292,9 @@ export default function PlanForm() {
                                 {errors.endDate && <span className="plan__error-text">{errors.endDate}</span>}
                             </div>
                         </div>
+                        {tripDuration && (
+                            <p className="plan__duration-hint">📅 Trip duration: <strong>{tripDuration} days</strong></p>
+                        )}
                     </div>
 
                     {/* Budget & Travelers */}
@@ -250,23 +303,22 @@ export default function PlanForm() {
                         <div className="plan__row">
                             <div className="plan__field">
                                 <div className="plan__label-row">
-                                    <label htmlFor="budget" className="plan__label">Budget (per person)</label>
+                                    <label className="plan__label">Budget level</label>
                                     <span className="plan__required-tag">required</span>
                                 </div>
-                                <div className="plan__input-wrap plan__input-wrap--prefix">
-                                    <span className="plan__input-prefix">$</span>
-                                    <input
-                                        id="budget"
-                                        type="number"
-                                        name="budget"
-                                        className={`plan__input plan__input--prefixed ${errors.budget ? 'plan__input--error' : ''}`}
-                                        placeholder="2,000"
-                                        value={form.budget}
-                                        onChange={handleChange}
-                                        min="0"
-                                    />
+                                <div className="plan__chips">
+                                    {BUDGET_LEVELS.map((level) => (
+                                        <button
+                                            key={level.value}
+                                            type="button"
+                                            className={`plan__chip ${form.budget === level.value ? 'plan__chip--active' : ''}`}
+                                            onClick={() => setForm((prev) => ({ ...prev, budget: level.value }))}
+                                        >
+                                            <span>{level.label}</span>
+                                            <span className="plan__chip-desc">{level.desc}</span>
+                                        </button>
+                                    ))}
                                 </div>
-                                {errors.budget && <span className="plan__error-text">{errors.budget}</span>}
                             </div>
                             <div className="plan__field">
                                 <label htmlFor="travelers" className="plan__label">Travelers</label>
@@ -280,9 +332,26 @@ export default function PlanForm() {
                                     {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
                                         <option key={n} value={n}>{n} {n === 1 ? 'person' : 'people'}</option>
                                     ))}
-                                    <option value="9+">9+ people</option>
+                                    <option value="9">9+ people</option>
                                 </select>
                             </div>
+                        </div>
+                    </div>
+
+                    {/* Interests */}
+                    <div className="plan__section">
+                        <h2 className="plan__section-title">What are you interested in?</h2>
+                        <div className="plan__chips">
+                            {INTEREST_OPTIONS.map((interest) => (
+                                <button
+                                    key={interest}
+                                    type="button"
+                                    className={`plan__chip ${form.interests.includes(interest) ? 'plan__chip--active' : ''}`}
+                                    onClick={() => toggleInterest(interest)}
+                                >
+                                    {interest}
+                                </button>
+                            ))}
                         </div>
                     </div>
 
@@ -341,27 +410,31 @@ export default function PlanForm() {
                         />
                     </div>
 
-                    {/* Submit */}
+                    {!isAuthenticated && (
+                        <div className="plan__auth-hint">
+                            💡 You'll need to <a href="/login" onClick={(e) => { e.preventDefault(); navigate('/login') }}>sign in</a> or{' '}
+                            <a href="/register" onClick={(e) => { e.preventDefault(); navigate('/register') }}>create an account</a> to generate your itinerary.
+                        </div>
+                    )}
+
                     <motion.button
                         type="submit"
                         className="plan__submit"
+                        disabled={submitting}
                         whileHover={{ scale: 1.02, y: -2 }}
                         whileTap={{ scale: 0.98 }}
                     >
-                        <span>Craft my itinerary</span>
-                        <svg
-                            width="18"
-                            height="18"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                        >
-                            <path d="M5 12h14" />
-                            <path d="m12 5 7 7-7 7" />
-                        </svg>
+                        {submitting ? (
+                            <span className="plan__spinner" />
+                        ) : (
+                            <>
+                                <span>Craft my itinerary</span>
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M5 12h14" />
+                                    <path d="m12 5 7 7-7 7" />
+                                </svg>
+                            </>
+                        )}
                     </motion.button>
                 </motion.form>
             ) : (
@@ -375,16 +448,9 @@ export default function PlanForm() {
                     <h2 className="plan__success-title">You're all set!</h2>
                     <p className="plan__success-text">
                         We're crafting the perfect {mood.title.toLowerCase()} itinerary for your trip to {destination}.
-                        Sit tight — magic takes a moment.
+                        Redirecting to the planning view...
                     </p>
-                    <motion.button
-                        className="plan__submit plan__submit--secondary"
-                        onClick={() => navigate('/')}
-                        whileHover={{ scale: 1.02 }}
-                        whileTap={{ scale: 0.98 }}
-                    >
-                        <span>Plan another trip</span>
-                    </motion.button>
+                    <div className="plan__spinner plan__spinner--dark" />
                 </motion.div>
             )}
         </motion.div>

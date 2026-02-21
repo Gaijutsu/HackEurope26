@@ -1,19 +1,46 @@
 import { Routes, Route, useLocation } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
+import { useAuth } from './contexts/AuthContext'
+import Navbar from './components/Navbar'
+import ProtectedRoute from './components/ProtectedRoute'
 import Landing from './pages/Landing'
 import PlanForm from './pages/PlanForm'
+import Login from './pages/Login'
+import Register from './pages/Register'
+import Dashboard from './pages/Dashboard'
+import Planning from './pages/Planning'
+import TripView from './pages/TripView'
+import Flights from './pages/Flights'
+import Accommodations from './pages/Accommodations'
 import './App.css'
 
 function App() {
   const location = useLocation()
+  const { isAuthenticated } = useAuth()
+
+  // Hide navbar on landing and auth pages for cleaner UX
+  const hideNavbar = ['/', '/login', '/register'].includes(location.pathname)
 
   return (
-    <AnimatePresence mode="wait">
-      <Routes location={location} key={location.pathname}>
-        <Route path="/" element={<Landing />} />
-        <Route path="/plan" element={<PlanForm />} />
-      </Routes>
-    </AnimatePresence>
+    <>
+      {!hideNavbar && isAuthenticated && <Navbar />}
+      <AnimatePresence mode="wait">
+        <Routes location={location} key={location.pathname}>
+          {/* Public routes */}
+          <Route path="/" element={<Landing />} />
+          <Route path="/plan" element={<PlanForm />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+
+          {/* Protected routes */}
+          <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+          <Route path="/trips/:tripId/planning" element={<ProtectedRoute><Planning /></ProtectedRoute>} />
+          <Route path="/trips/:tripId" element={<ProtectedRoute><TripView /></ProtectedRoute>} />
+          <Route path="/trips/:tripId/flights" element={<ProtectedRoute><Flights /></ProtectedRoute>} />
+          <Route path="/trips/:tripId/accommodations" element={<ProtectedRoute><Accommodations /></ProtectedRoute>} />
+        </Routes>
+      </AnimatePresence>
+    </>
   )
 }
 

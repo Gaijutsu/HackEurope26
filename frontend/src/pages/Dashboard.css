@@ -1,0 +1,229 @@
+/* ===== Dashboard ===== */
+
+.dashboard {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 40px 24px 80px;
+}
+
+.dashboard__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 40px;
+  gap: 16px;
+}
+
+.dashboard__title {
+  font-family: var(--font-display);
+  font-size: clamp(1.6rem, 3vw, 2.2rem);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.dashboard__subtitle {
+  font-size: 0.9rem;
+  font-weight: 300;
+  color: var(--text-secondary);
+}
+
+.dashboard__new-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 28px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: white;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-deep) 100%);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+  white-space: nowrap;
+  transition: box-shadow var(--transition-fast);
+}
+
+.dashboard__new-btn:hover {
+  box-shadow: var(--shadow-lg), var(--shadow-glow);
+}
+
+.dashboard__error {
+  padding: 14px 18px;
+  font-size: 0.85rem;
+  color: #d63031;
+  background: rgba(214, 48, 49, 0.06);
+  border: 1px solid rgba(214, 48, 49, 0.15);
+  border-radius: var(--radius-sm);
+  margin-bottom: 24px;
+}
+
+/* Grid */
+.dashboard__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 20px;
+}
+
+/* Trip Card */
+.dash-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--transition-fast), border-color var(--transition-fast);
+}
+
+.dash-card:hover {
+  box-shadow: var(--shadow-md);
+  border-color: var(--accent);
+}
+
+.dash-card__body {
+  padding: 24px;
+  cursor: pointer;
+}
+
+.dash-card__title {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+.dash-card__dest,
+.dash-card__dates {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.dash-card__status {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 100px;
+  margin-top: 8px;
+}
+
+.dash-card__status--done {
+  color: #00b894;
+  background: rgba(0, 184, 148, 0.08);
+}
+
+.dash-card__status--progress {
+  color: #0984e3;
+  background: rgba(9, 132, 227, 0.08);
+}
+
+.dash-card__status--pending {
+  color: #fdcb6e;
+  background: rgba(253, 203, 110, 0.12);
+}
+
+.dash-card__status--failed {
+  color: #d63031;
+  background: rgba(214, 48, 49, 0.08);
+}
+
+.dash-card__actions {
+  display: flex;
+  border-top: 1px solid var(--border);
+}
+
+.dash-card__action {
+  flex: 1;
+  padding: 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-align: center;
+  transition: all var(--transition-fast);
+}
+
+.dash-card__action--view {
+  color: var(--accent-deep);
+}
+
+.dash-card__action--view:hover {
+  background: var(--bg-secondary);
+}
+
+.dash-card__action--delete {
+  color: var(--text-muted);
+  border-left: 1px solid var(--border);
+}
+
+.dash-card__action--delete:hover {
+  color: #d63031;
+  background: rgba(214, 48, 49, 0.04);
+}
+
+/* Skeleton */
+.dash-card--skeleton {
+  padding: 24px;
+}
+
+.dash-card__skeleton-line {
+  height: 14px;
+  background: linear-gradient(90deg, var(--bg-secondary) 25%, rgba(232, 196, 200, 0.15) 50%, var(--bg-secondary) 75%);
+  background-size: 200% 100%;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  animation: shimmer 1.5s infinite;
+}
+
+.dash-card__skeleton-line--title {
+  height: 20px;
+  width: 70%;
+}
+
+.dash-card__skeleton-line--short {
+  width: 50%;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Empty state */
+.dashboard__empty {
+  text-align: center;
+  padding: 80px 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.dashboard__empty-icon {
+  font-size: 3.5rem;
+  margin-bottom: 16px;
+}
+
+.dashboard__empty h2 {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.dashboard__empty p {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  margin-bottom: 28px;
+  max-width: 360px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+@media (max-width: 640px) {
+  .dashboard__header {
+    flex-direction: column;
+  }
+  .dashboard__grid {
+    grid-template-columns: 1fr;
+  }
+}

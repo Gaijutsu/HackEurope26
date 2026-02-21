@@ -1,0 +1,234 @@
+/* ===== Accommodations Page ===== */
+
+.accom-page {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 32px 24px 80px;
+}
+
+.accom-page__loading {
+  text-align: center;
+  padding: 60px 24px;
+  color: var(--text-muted);
+}
+
+.accom-page__header {
+  margin-bottom: 32px;
+}
+
+.accom-page__title {
+  font-family: var(--font-display);
+  font-size: clamp(1.4rem, 3vw, 1.8rem);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.accom-page__error {
+  padding: 14px 18px;
+  font-size: 0.85rem;
+  color: #d63031;
+  background: rgba(214, 48, 49, 0.06);
+  border: 1px solid rgba(214, 48, 49, 0.15);
+  border-radius: var(--radius-sm);
+  margin-bottom: 24px;
+}
+
+.accom-page__empty {
+  text-align: center;
+  padding: 60px 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--text-secondary);
+}
+
+.accom-page__list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Accommodation Card */
+.accom-card {
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  transition: all var(--transition-fast);
+}
+
+.accom-card:hover {
+  box-shadow: var(--shadow-md);
+  border-color: var(--accent);
+}
+
+.accom-card--selected {
+  border-color: var(--accent-deep);
+  box-shadow: 0 0 0 3px rgba(232, 196, 200, 0.12);
+}
+
+.accom-card--booked {
+  border-color: rgba(0, 184, 148, 0.3);
+}
+
+.accom-card__main {
+  display: flex;
+  gap: 24px;
+  padding: 24px;
+}
+
+.accom-card__info {
+  flex: 1;
+  min-width: 0;
+}
+
+.accom-card__name {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.accom-card__details {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.accom-card__rating {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #f39c12;
+}
+
+.accom-card__type {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--accent-deep);
+  background: rgba(232, 196, 200, 0.15);
+  padding: 2px 10px;
+  border-radius: 100px;
+}
+
+.accom-card__location,
+.accom-card__dates {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.accom-card__amenities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.accom-card__amenity {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  padding: 3px 10px;
+  border-radius: 100px;
+}
+
+.accom-card__pricing {
+  text-align: right;
+  min-width: 100px;
+  flex-shrink: 0;
+}
+
+.accom-card__price {
+  display: block;
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.accom-card__price-label {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.accom-card__total {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+/* Actions */
+.accom-card__actions {
+  display: flex;
+  gap: 8px;
+  padding: 12px 24px;
+  border-top: 1px solid var(--border);
+  background: rgba(255, 248, 246, 0.5);
+}
+
+.accom-card__action {
+  padding: 8px 18px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 100px;
+  transition: all var(--transition-fast);
+}
+
+.accom-card__action:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.accom-card__action--selected {
+  color: white;
+  background: var(--accent-deep);
+  border-color: var(--accent-deep);
+}
+
+.accom-card__action--book {
+  color: white;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-deep) 100%);
+  border-color: transparent;
+}
+
+.accom-card__action--book:hover {
+  box-shadow: var(--shadow-glow);
+}
+
+.accom-card__action--external {
+  color: var(--accent-deep);
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.accom-card__booked-badge {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #00b894;
+  padding: 8px 18px;
+  background: rgba(0, 184, 148, 0.08);
+  border-radius: 100px;
+}
+
+@media (max-width: 640px) {
+  .accom-card__main {
+    flex-direction: column;
+    gap: 16px;
+  }
+  .accom-card__pricing {
+    text-align: left;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+}

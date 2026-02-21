@@ -389,6 +389,91 @@
     margin: 0 auto;
 }
 
+/* Spinner */
+.plan__spinner {
+    display: inline-block;
+    width: 22px;
+    height: 22px;
+    border: 2.5px solid rgba(255, 255, 255, 0.3);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: planSpin 0.7s linear infinite;
+}
+
+.plan__spinner--dark {
+    border-color: rgba(196, 139, 147, 0.2);
+    border-top-color: var(--accent-deep);
+    margin-top: 20px;
+}
+
+@keyframes planSpin {
+    to { transform: rotate(360deg); }
+}
+
+/* Auth hint */
+.plan__auth-hint {
+    font-size: 0.88rem;
+    color: var(--text-secondary);
+    background: rgba(232, 196, 200, 0.08);
+    border: 1px solid rgba(232, 196, 200, 0.2);
+    border-radius: var(--radius-md);
+    padding: 14px 20px;
+    line-height: 1.6;
+}
+
+.plan__auth-hint a {
+    color: var(--accent-deep);
+    font-weight: 600;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.plan__auth-hint a:hover {
+    color: var(--text-primary);
+}
+
+/* Duration hint */
+.plan__duration-hint {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-top: 4px;
+}
+
+.plan__duration-hint strong {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+/* Error banner */
+.plan__error-banner {
+    font-size: 0.88rem;
+    font-weight: 500;
+    color: #d63031;
+    background: rgba(214, 48, 49, 0.06);
+    border: 1px solid rgba(214, 48, 49, 0.2);
+    border-radius: var(--radius-md);
+    padding: 14px 20px;
+}
+
+/* Chip description (budget levels) */
+.plan__chip-desc {
+    display: block;
+    font-size: 0.7rem;
+    font-weight: 400;
+    opacity: 0.7;
+    margin-top: 2px;
+}
+
+.plan__chip--active .plan__chip-desc {
+    opacity: 0.9;
+}
+
+/* Disabled submit */
+.plan__submit:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
 /* Responsive */
 @media (max-width: 640px) {
     .plan__mood-preview {
