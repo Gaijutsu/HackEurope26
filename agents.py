@@ -21,6 +21,25 @@ from typing import Any, Dict, Generator, List, Optional
 
 from crewai import Agent, Crew, Process, Task
 from crewai.tasks.task_output import TaskOutput
+from crewai.tools import tool as crewai_tool
+
+# Optional: web search & scraping tools (need TAVILY_API_KEY / SERPER_API_KEY)
+_web_search_tools: list = []
+try:
+    if os.getenv("TAVILY_API_KEY"):
+        from crewai_tools import TavilySearchTool
+        _web_search_tools.append(TavilySearchTool())
+    elif os.getenv("SERPER_API_KEY"):
+        from crewai_tools import SerperDevTool
+        _web_search_tools.append(SerperDevTool())
+except Exception:
+    pass  # web search unavailable - agents will use LLM knowledge only
+
+try:
+    from crewai_tools import ScrapeWebsiteTool
+    _scrape_tool = ScrapeWebsiteTool()
+except Exception:
+    _scrape_tool = None
 
 from mock_data import (
     generate_mock_flights,
@@ -85,11 +104,119 @@ def _fallback_day_plan(city: str, day_number: int) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# LLM model helper
+# LLM model helper  (supports OpenAI, Gemini, Claude via LLM_PROVIDER env var)
 # ---------------------------------------------------------------------------
 
+# CrewAI uses native providers with the format "provider/model-name".
+# Supported LLM_PROVIDER values: openai (default), gemini, anthropic
+_LLM_DEFAULTS = {
+    "openai":    "gpt-4o-mini",
+    "gemini":    "gemini-2.0-flash",
+    "anthropic": "claude-sonnet-4-20250514",
+}
+
+
 def _llm_name() -> str:
-    return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    """Return the model string in CrewAI's native `provider/model` format.
+
+    Reads:
+      LLM_PROVIDER  - one of: openai, gemini, anthropic  (default: openai)
+      LLM_MODEL     - override the specific model name
+    """
+    provider = os.getenv("LLM_PROVIDER", "openai").lower().strip()
+    if provider not in _LLM_DEFAULTS:
+        provider = "openai"  # fallback
+    model = os.getenv("LLM_MODEL", _LLM_DEFAULTS[provider])
+
+    # OpenAI models don't need a prefix in CrewAI (it's the default)
+    if provider == "openai":
+        return model
+    # Gemini & Anthropic need the provider/ prefix
+    return f"{provider}/{model}"
+
+
+# ---------------------------------------------------------------------------
+# Custom CrewAI Tools (wrapping external APIs / mock data)
+# ---------------------------------------------------------------------------
+
+@crewai_tool("Search Flights")
+def search_flights_tool(
+    origin: str,
+    destination: str,
+    departure_date: str,
+    return_date: str,
+    num_travelers: int = 1,
+) -> str:
+    """Search for available flights between two cities.
+    Simulates a Skyscanner/Google Flights API.
+    Args:
+        origin: Departure city (e.g. 'New York')
+        destination: Arrival city (e.g. 'Tokyo')
+        departure_date: YYYY-MM-DD format
+        return_date: YYYY-MM-DD format
+        num_travelers: Number of passengers
+    Returns:
+        JSON string with flight options including airline, price, duration.
+    """
+    flights = generate_mock_flights(origin, destination, departure_date, return_date, num_travelers)
+    # Return top 5 for conciseness
+    summary = []
+    for f in flights[:5]:
+        summary.append({
+            "airline": f.get("airline"),
+            "flight_number": f.get("flight_number"),
+            "price": f.get("price"),
+            "duration_minutes": f.get("duration_minutes"),
+            "departure_datetime": f.get("departure_datetime"),
+            "arrival_datetime": f.get("arrival_datetime"),
+            "flight_type": f.get("flight_type"),
+        })
+    return json.dumps(summary, default=str)
+
+
+@crewai_tool("Search Accommodations")
+def search_accommodations_tool(
+    city: str,
+    check_in_date: str,
+    check_out_date: str,
+    num_guests: int = 1,
+) -> str:
+    """Search for hotels and accommodations in a city.
+    Simulates an Airbnb/Booking.com API.
+    Args:
+        city: City name (e.g. 'Paris')
+        check_in_date: YYYY-MM-DD format
+        check_out_date: YYYY-MM-DD format
+        num_guests: Number of guests
+    Returns:
+        JSON string with accommodation options including name, type, price, rating.
+    """
+    accs = generate_mock_accommodations(city, check_in_date, check_out_date, num_guests)
+    summary = []
+    for a in accs[:5]:
+        summary.append({
+            "name": a.get("name"),
+            "type": a.get("type"),
+            "city": a.get("city"),
+            "price_per_night": a.get("price_per_night"),
+            "total_price": a.get("total_price"),
+            "rating": a.get("rating"),
+            "amenities": a.get("amenities", [])[:5],
+        })
+    return json.dumps(summary, default=str)
+
+
+@crewai_tool("Get City Information")
+def get_city_info_tool(city_name: str) -> str:
+    """Get detailed information about a city including attractions, food, and transport.
+    Simulates a Google Maps / Places API.
+    Args:
+        city_name: Name of the city (e.g. 'Tokyo')
+    Returns:
+        JSON string with city info: country, description, top attractions, best food, local transport.
+    """
+    info = get_city_info(city_name)
+    return json.dumps(info, default=str)
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +224,13 @@ def _llm_name() -> str:
 # ---------------------------------------------------------------------------
 
 def _build_agents():
-    """Create the five specialized agents."""
+    """Create the five specialized agents with appropriate tools."""
+
+    # -- Researcher tools: web search + scraping for real-time destination intel --
+    researcher_tools = list(_web_search_tools)  # Tavily or Serper
+    if _scrape_tool:
+        researcher_tools.append(_scrape_tool)
+    researcher_tools.append(get_city_info_tool)  # local city DB as fallback
 
     destination_researcher = Agent(
         role="Destination Researcher",
@@ -105,13 +238,19 @@ def _build_agents():
         backstory=(
             "You are a seasoned travel researcher with extensive knowledge of destinations worldwide. "
             "You excel at uncovering practical travel information including top attractions, local food, "
-            "transport tips, and budget considerations. You always provide structured, actionable information."
+            "transport tips, and budget considerations. You always provide structured, actionable information. "
+            "You have access to web search tools and a city database to gather real-time data."
         ),
+        tools=researcher_tools,
         llm=_llm_name(),
         verbose=False,
         allow_delegation=False,
-        max_iter=5,
+        max_iter=8,
     )
+
+    # -- City selector tools: web search + city info --
+    selector_tools = list(_web_search_tools)
+    selector_tools.append(get_city_info_tool)
 
     city_selector = Agent(
         role="City Selection Specialist",
@@ -119,49 +258,63 @@ def _build_agents():
         backstory=(
             "You are a travel routing expert who knows which cities pair well together and how to "
             "create logical, efficient multi-city itineraries. You consider travel distances, "
-            "city highlights, and traveler interests to select the best route."
+            "city highlights, and traveler interests to select the best route. "
+            "Use the city info tool to verify your selections."
         ),
+        tools=selector_tools,
         llm=_llm_name(),
         verbose=False,
         allow_delegation=False,
         max_iter=5,
     )
 
+    # -- Flight finder tool: Skyscanner/Google Flights-like search --
     flight_finder = Agent(
         role="Flight Search Specialist",
-        goal="Find the best flight options for the trip",
+        goal="Find the best flight options for the trip using the flight search tool",
         backstory=(
-            "You are a flight search expert who finds the best air travel options. "
-            "You analyze available flights and present clear options for travelers."
+            "You are a flight search expert who uses the flight search API (similar to Skyscanner) "
+            "to find the best air travel options. Always use the Search Flights tool to get real "
+            "flight data rather than making up flight information."
         ),
+        tools=[search_flights_tool],
         llm=_llm_name(),
         verbose=False,
         allow_delegation=False,
-        max_iter=3,
+        max_iter=5,
     )
 
+    # -- Accommodation finder tool: Airbnb/Booking.com-like search --
     accommodation_finder = Agent(
         role="Accommodation Search Specialist",
-        goal="Find the best places to stay for each city in the trip",
+        goal="Find the best places to stay for each city using the accommodation search tool",
         backstory=(
-            "You are an accommodation expert who matches travelers with the perfect "
-            "places to stay based on budget, location, and amenities."
+            "You are an accommodation expert who uses the accommodation search API (similar to "
+            "Airbnb/Booking.com) to find the perfect places to stay. Always use the Search "
+            "Accommodations tool for each city rather than making up accommodation data."
         ),
+        tools=[search_accommodations_tool],
         llm=_llm_name(),
         verbose=False,
         allow_delegation=False,
-        max_iter=3,
+        max_iter=5,
     )
+
+    # -- Itinerary planner tools: city info + web search for activity details --
+    planner_tools = [get_city_info_tool]
+    planner_tools.extend(_web_search_tools)  # optional web search for activity details
 
     itinerary_planner = Agent(
         role="Itinerary Planner",
-        goal="Create a detailed day-by-day itinerary using all gathered information",
+        goal="Create a detailed day-by-day itinerary using all gathered information and city data",
         backstory=(
             "You are an expert itinerary designer who creates cohesive, realistic day-by-day "
             "travel plans. You synthesize destination research, city information, and traveler "
             "preferences to build plans with proper timing, varied activities, and meals. "
+            "Use the city info tool to get details about attractions and food for each city. "
             "You always ensure plans are practical and enjoyable."
         ),
+        tools=planner_tools,
         llm=_llm_name(),
         verbose=False,
         allow_delegation=False,

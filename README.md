@@ -1,216 +1,179 @@
-# Agentic Trip Planner - Hackathon Version 🚀
+# Agentic Trip Planner - CrewAI Multi-Agent Edition
 
-A simplified, fully-functional prototype of the Agentic Trip Planning Software built for a 24-hour hackathon.
+A multi-agent trip planning system built with **CrewAI** for a hackathon. Five specialised AI agents collaborate to research destinations, find flights and accommodations, and build day-by-day itineraries.
 
-## Features ✨
+## Features
 
-- **AI-Powered Planning**: Single agent handles destination research, city selection, flight/hotel search, and itinerary creation
-- **Multi-City Support**: Automatically plans multi-city trips when destination is a country
-- **Preference-Aware**: Respects dietary restrictions and travel style
-- **Booking Integration**: Mock flight and hotel data with booking links
-- **Flexible Management**: Delay itinerary items to another day
-- **Simple UI**: Streamlit-based interface for rapid development
+- **CrewAI Multi-Agent Orchestration** - 5 agents that share context and collaborate
+- **Multi-Provider LLM Support** - OpenAI, Google Gemini, and Anthropic Claude
+- **Real-Time Progress Streaming** - SSE endpoint shows each agent's progress live
+- **Tool-Equipped Agents** - web search (Tavily/Serper), flight search, accommodation search, city info
+- **Multi-City Planning** - automatically plans multi-city routes for country-level destinations
+- **Preference-Aware** - respects dietary restrictions, interests, and budget level
+- **Mock Data APIs** - flights and accommodations work without external API keys
 
-## Tech Stack 🛠️
+## Agent Architecture
+
+| Agent | Role | Tools |
+|---|---|---|
+| **DestinationResearcher** | Web research on destinations | TavilySearch, ScrapeWebsite, CityInfo |
+| **CitySelector** | Picks optimal cities for country trips | TavilySearch, CityInfo |
+| **FlightFinder** | Searches for flight options | SearchFlights (Skyscanner-like mock) |
+| **AccommodationFinder** | Finds places to stay | SearchAccommodations (Airbnb-like mock) |
+| **ItineraryPlanner** | Builds the day-by-day plan | CityInfo, TavilySearch |
+
+Agents pass context through CrewAI's task dependency system - the ItineraryPlanner receives output from all four previous agents to create a cohesive plan.
+
+## Tech Stack
 
 | Component | Technology |
-|-----------|------------|
+|---|---|
+| Agent Framework | CrewAI |
+| LLM Providers | OpenAI, Google Gemini, Anthropic Claude |
+| Backend | FastAPI + SSE streaming |
 | Frontend | Streamlit |
-| Backend | FastAPI |
-| Database | SQLite |
-| AI/LLM | OpenAI GPT-4o-mini |
-| External APIs | Mock data (flights, hotels) |
+| Database | SQLite + SQLAlchemy |
+| Web Search | Tavily or Serper (optional) |
 
-## Quick Start 🚀
+## Quick Start
 
-### 1. Install Dependencies
+### 1. Clone and create a virtual environment
 
 ```bash
-cd trip_planner_hackathon
+cd HackEurope26
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Set OpenAI API Key
+### 2. Configure your LLM provider
+
+Copy the example env file and set your API key:
 
 ```bash
-export OPENAI_API_KEY="your-api-key-here"
+cp .env.example .env
 ```
 
-Or create a `.env` file:
-```
-OPENAI_API_KEY=your-api-key-here
-```
+Then edit `.env` and set **one** of these depending on your provider:
 
-### 3. Start the Backend
+| Provider | Env Vars to Set |
+|---|---|
+| **OpenAI** (default) | `OPENAI_API_KEY=sk-...` |
+| **Google Gemini** | `LLM_PROVIDER=gemini` + `GEMINI_API_KEY=...` |
+| **Anthropic Claude** | `LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY=...` |
 
+Default models per provider:
+- OpenAI: `gpt-4o-mini`
+- Gemini: `gemini-2.0-flash`
+- Claude: `claude-sonnet-4-20250514`
+
+Override with `LLM_MODEL=your-model-name` if needed.
+
+### 3. Start everything
+
+**Option A - One command:**
 ```bash
+bash start.sh
+```
+
+**Option B - Manual (two terminals):**
+
+Terminal 1 (backend):
+```bash
+source .venv/bin/activate
 python main.py
+# API at http://localhost:8000
 ```
 
-The API will start on `http://localhost:8000`
-
-### 4. Start the Frontend (New Terminal)
-
+Terminal 2 (frontend):
 ```bash
+source .venv/bin/activate
 cd streamlit_app
 streamlit run app.py
+# UI at http://localhost:8501
 ```
 
-The UI will open in your browser at `http://localhost:8501`
+### 4. Use the app
 
-## Usage 📖
+1. Open http://localhost:8501
+2. Register with any email/password
+3. Create a trip (try "Japan" for multi-city or "Tokyo" for single-city)
+4. Click "Start Planning" and watch the agents work in real-time
 
-1. **Register/Login**: Create an account or login
-2. **Create Trip**: Click "New Trip" and fill in the wizard:
-   - Destination (city or country)
-   - Travel dates
-   - Number of travelers
-   - Interests
-   - Dietary restrictions
-   - Budget level
-3. **AI Planning**: The AI agent will:
-   - Research your destination
-   - Select cities (if country)
-   - Find flights and hotels (mock data)
-   - Create a day-by-day itinerary
-4. **View Itinerary**: Browse your personalized schedule
-5. **Manage Bookings**: View flights and accommodations with booking links
-6. **Delay Items**: Move itinerary items to different days
+## Running with Mock Data Only
 
-## API Endpoints 📡
+**Yes, the system works fully with mock data and requires NO external API keys beyond an LLM key.** Here's what happens:
+
+| Component | With API Key | Without API Key |
+|---|---|---|
+| **LLM** (required) | Full agent reasoning | Won't start without at least one LLM key |
+| **Flights** | Mock data always | Mock data always |
+| **Accommodations** | Mock data always | Mock data always |
+| **City Info** | Built-in database | Built-in database |
+| **Web Search** | Live Tavily/Serper results | Agents use LLM knowledge only |
+
+**Minimum to run:** Just one LLM API key (`OPENAI_API_KEY`, `GEMINI_API_KEY`, or `ANTHROPIC_API_KEY`).
+
+The flight search, accommodation search, and city info tools all use local mock data generators - no Skyscanner/Airbnb/Google Maps keys needed.
+
+## Optional: Web Search
+
+For better destination research, set a web search key:
+
+```bash
+# Tavily (preferred, free tier available)
+TAVILY_API_KEY=tvly-...
+
+# OR Serper (alternative)
+SERPER_API_KEY=...
+```
+
+Without these, the DestinationResearcher agent still works - it just relies on the LLM's training data instead of live search results.
+
+## API Endpoints
 
 | Endpoint | Method | Description |
-|----------|--------|-------------|
+|---|---|---|
 | `/auth/register` | POST | Create account |
 | `/auth/login` | POST | Login |
-| `/trips` | GET | List user's trips |
-| `/trips` | POST | Create new trip |
-| `/trips/{id}/plan` | POST | Start AI planning |
+| `/trips` | GET | List trips |
+| `/trips` | POST | Create trip |
+| `/trips/{id}/plan` | POST | Run planning (sync) |
+| `/trips/{id}/plan/stream` | GET | Run planning (SSE stream) |
+| `/trips/{id}/plan/status` | GET | Check planning status |
 | `/trips/{id}/itinerary` | GET | Get day-by-day itinerary |
-| `/trips/{id}/itinerary/items/{id}/delay` | PUT | Delay item to another day |
 | `/trips/{id}/flights` | GET | Get flight options |
-| `/trips/{id}/accommodations` | GET | Get hotel options |
+| `/trips/{id}/accommodations` | GET | Get accommodation options |
+| `/trips/{id}/itinerary/items/{id}/delay` | PUT | Delay item to another day |
+| `/search/cities` | GET | Search city database |
+| `/health` | GET | Health check (shows LLM provider) |
 
-## Architecture 🏗️
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    STREAMLIT FRONTEND                        │
-│  - Trip Creation Wizard                                      │
-│  - Itinerary Viewer                                          │
-│  - Flight/Hotel Management                                   │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ HTTP/REST
-                       ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    FASTAPI BACKEND                           │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │   Agents    │  │   Models    │  │   External APIs     │  │
-│  │  (Python)   │  │  (SQLite)   │  │  (OpenAI + Mocks)   │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## Simplified Agent Architecture 🤖
-
-Instead of 14 separate agents, we use a single **PlanningAgent** that:
-
-1. Determines if destination is city or country
-2. Selects cities (if country) using AI
-3. Generates mock flights and hotels
-4. Creates day-by-day itinerary using OpenAI
-
-This reduces complexity while maintaining the core functionality.
-
-## Database Schema 🗄️
-
-Simplified to 8 core tables:
-- `users` - User accounts
-- `trips` - Trip details and planning status
-- `itinerary_items` - Day-by-day activities
-- `flights` - Flight options
-- `accommodations` - Hotel options
-- `cities` - City data for search
-
-## Demo Tips 🎯
-
-1. **Quick Demo Flow**:
-   - Register with any email/password
-   - Create a trip to "Japan" (country-level planning)
-   - Watch AI select Tokyo, Kyoto, Osaka
-   - View generated itinerary with flights and hotels
-
-2. **Key Features to Show**:
-   - AI city selection for countries
-   - Day-by-day itinerary with times
-   - Delay functionality
-   - Booking links
-
-3. **Test Destinations**:
-   - "Tokyo" (city)
-   - "Japan" (country - multi-city)
-   - "Paris" (city)
-   - "France" (country - multi-city)
-
-## Limitations ⚠️
-
-This is a hackathon prototype with intentional simplifications:
-
-- **Mock External APIs**: Flights and hotels are simulated
-- **No Real Booking**: Links go to airline/hotel websites
-- **Simplified Auth**: Session-based (no JWT refresh)
-- **No Caching**: Direct database queries
-- **No Message Queue**: Synchronous planning
-- **SQLite**: Single-file database (not production-ready)
-
-## Future Enhancements 🔮
-
-To make this production-ready:
-
-1. Replace mock data with real APIs (Amadeus, Booking.com)
-2. Add Redis caching
-3. Implement message queue for async planning
-4. Migrate to PostgreSQL
-5. Add comprehensive error handling
-6. Implement proper JWT auth with refresh tokens
-7. Add WebSocket for real-time planning updates
-8. Expand to 14 specialized agents with LangGraph
-
-## Files Structure 📁
+## Project Structure
 
 ```
-trip_planner_hackathon/
-├── main.py                 # FastAPI backend
-├── database.py             # SQLite models
-├── agents.py               # Planning agent
-├── mock_data.py            # Mock flights/hotels
-├── requirements.txt
-├── README.md
-└── streamlit_app/
-    └── app.py              # Streamlit frontend
+HackEurope26/
+├── agents.py              # CrewAI agents, tools, tasks, and crew orchestration
+├── main.py                # FastAPI backend with SSE streaming
+├── database.py            # SQLAlchemy models (User, Trip, Flight, etc.)
+├── mock_data.py           # Mock flight/accommodation/city data generators
+├── requirements.txt       # Python dependencies
+├── .env.example           # Environment variable template
+├── start.sh               # One-command launcher
+├── streamlit_app/
+│   └── app.py             # Streamlit frontend
+└── docs/                  # Design documentation
 ```
 
-## Hackathon Judging Criteria 🏆
+## Demo Tips
 
-This prototype demonstrates:
+- **"Japan"** triggers multi-city planning (Tokyo, Kyoto, Osaka)
+- **"Paris"** triggers single-city planning
+- Watch the SSE stream to see agents hand off context to each other
+- The `/health` endpoint shows which LLM provider is active
 
-- ✅ **Working AI Agent**: Single agent creates complete trip plans
-- ✅ **Multi-City Planning**: Automatically plans multi-city trips
-- ✅ **Preference Awareness**: Respects dietary restrictions
-- ✅ **Full User Flow**: From signup to itinerary management
-- ✅ **Delay Functionality**: Move items between days
-- ✅ **Booking Integration**: Links to book flights/hotels
-- ✅ **Clean UI**: Intuitive Streamlit interface
-- ✅ **Working Demo**: Fully functional in 24 hours
+## Limitations
 
-## Credits 👥
-
-Built with ❤️ for a 24-hour hackathon using:
-- FastAPI for the backend
-- Streamlit for the frontend
-- OpenAI for AI planning
-- SQLite for data storage
-
-## License 📄
-
-MIT License - Hackathon Project
+- Flight and accommodation data is mock (simulated APIs)
+- No real booking integration
+- SQLite database (not production-ready)
+- Session-based auth (simplified for hackathon)

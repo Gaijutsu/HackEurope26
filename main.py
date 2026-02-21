@@ -621,10 +621,13 @@ def search_cities(q: str):
 # Health check
 @app.get("/health")
 def health_check():
+    from agents import _llm_name
     return {
         "status": "ok",
         "version": "2.0.0",
         "engine": "CrewAI",
+        "llm": _llm_name(),
+        "llm_provider": os.getenv("LLM_PROVIDER", "openai"),
         "agents": [
             "DestinationResearcher",
             "CitySelector",
