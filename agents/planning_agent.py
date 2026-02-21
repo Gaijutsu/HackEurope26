@@ -515,24 +515,32 @@ def _build_agents():
         role="Itinerary Planner",
         goal=(
             "Create a detailed day-by-day itinerary with SPECIFIC named places for every "
-            "activity and meal, arranged so that consecutive activities are GEOGRAPHICALLY "
-            "CLOSE to each other. Cluster activities by neighbourhood to minimise travel "
-            "time. Never say 'find a local restaurant' — always name the exact restaurant, "
-            "cafe, or food stall. Include a Google Maps link for every location."
+            "activity and meal, structured as DAILY ROUTES through the city. Each day should "
+            "follow either a LOOP (hotel → area A → area B → hotel) or a LINEAR path "
+            "(hotel → A → B → C, then transit back). Use the neighbourhood connectivity "
+            "data to plan routes through 2-4 ADJACENT areas per day. Never say 'find a "
+            "local restaurant' — always name the exact place. Include a Google Maps link "
+            "for every location."
         ),
         backstory=(
-            "You are an expert itinerary designer, local food critic, and city logistics "
-            "planner who knows specific restaurants, cafes, and street food stalls in every "
-            "major city. Your TOP PRIORITY is geographic efficiency: you group activities "
-            "by neighbourhood so travellers walk between consecutive stops instead of "
-            "criss-crossing the city. You plan meals at restaurants NEAR the attractions "
-            "being visited that part of the day — breakfast near the hotel, lunch near the "
-            "morning's sights, dinner near the afternoon area or back near the hotel. "
-            "You ALWAYS recommend places by name (e.g. 'Ichiran Ramen Shibuya', "
-            "'Le Bouillon Chartier'). You never use generic phrases like 'find a local "
-            "restaurant' or 'try local food'. You include a Google Maps URL for every "
-            "single location in the itinerary. You understand local currencies and always "
-            "show prices in the local currency with a USD equivalent."
+            "You are an expert itinerary designer, local food critic, and city route "
+            "planner who creates daily walking routes through cities. You think of each "
+            "day as a GEOGRAPHIC ROUTE — not a random list of places. You use the "
+            "'neighbourhood_travel' data to understand which areas are adjacent and how "
+            "long it takes to travel between them. You use the 'suggested_routes' as "
+            "templates and customise them based on traveler interests.\n\n"
+            "Your route philosophy:\n"
+            "- LOOP ROUTE: Start near hotel → walk outward through 2-3 adjacent areas "
+            "→ circle back to hotel area. Great for days with evening dinner plans near "
+            "the hotel.\n"
+            "- LINEAR ROUTE: Start near hotel → travel in one direction through 3-4 "
+            "areas → end at a transit hub and take train/bus/rideshare back. Great for "
+            "covering more ground.\n\n"
+            "You pick meals at restaurants IN the area you're exploring at that time of "
+            "day. You ALWAYS recommend places by name (e.g. 'Ichiran Ramen Shibuya', "
+            "'Le Bouillon Chartier'). You never use generic phrases. You include a "
+            "Google Maps URL for every location. You understand local currencies and "
+            "always show prices in the local currency with a USD equivalent."
         ),
         tools=planner_tools,
         llm=_llm_name(),
@@ -700,39 +708,64 @@ Return ONLY valid JSON.""",
         description=f"""Create a {duration}-day itinerary for {dest} ({start} to {end}).
 
 Context from previous agents: destination research (including neighbourhood layout with
-attractions grouped by district), selected cities, flights, and accommodations (including
-hotel name and neighbourhood for each city).
+attractions grouped by district, TRAVEL TIMES between areas, and SUGGESTED ROUTES),
+selected cities, flights, and accommodations (including hotel name and neighbourhood).
 
 Travelers: {travelers} | Interests: {interests} | Diet: {dietary} | Budget: {budget}
 
-PLANNING APPROACH:
-- First, note the HOTEL NAME and NEIGHBOURHOOD from the accommodation context for each city.
-- Use the "neighbourhoods" data from city research to understand which attractions and
-  restaurants are in the SAME district.
-- Plan each day by picking ONE or TWO adjacent neighbourhoods and filling the day with
-  activities, meals, and sights from those areas.
-- Use the Get City Information tool for any city to see its neighbourhood breakdown.
+PLANNING APPROACH — ROUTE-BASED DAILY PLANNING:
+1. Use the Get City Information tool for each city. The result includes:
+   - "neighbourhoods": areas with attractions and food
+   - "neighbourhood_travel": travel times between each pair of areas
+   - "suggested_routes": pre-built loop and linear route templates
+   - "transit_hubs": stations for getting back to the hotel
+
+2. Note the HOTEL NAME and NEIGHBOURHOOD from the accommodation context.
+
+3. For each day, design a ROUTE — not a random list. Choose one of two patterns:
+
+   **LOOP ROUTE** (hotel → A → B → C → hotel):
+   - Best for half-days or when dinner should be near the hotel
+   - Pick 2-3 ADJACENT areas that connect back to the hotel area
+   - Use the "neighbourhood_travel" data to confirm they connect
+   - Morning: explore area A (near hotel), lunch in area A
+   - Afternoon: walk to area B, explore, walk to area C
+   - Evening: return to hotel area for dinner
+
+   **LINEAR ROUTE** (hotel → A → B → C → transit back):
+   - Best for full days exploring further-out areas
+   - Pick 3-4 areas in a LINE moving away from the hotel
+   - End at or near a "transit_hub" for easy return
+   - Morning: explore first area, lunch there or in next area
+   - Afternoon: continue along the line
+   - Evening: dinner in the final area, then transit/rideshare back
+
+4. Vary the routes across days so different parts of the city are covered.
+   Refer to "suggested_routes" for inspiration but customise based on interests.
+
+5. Between activities, the next stop MUST be reachable by walking or a short
+   transit hop (check "neighbourhood_travel" times). NEVER jump to a
+   non-adjacent area mid-route.
 
 CRITICAL RULES:
-1. **GEOGRAPHIC PROXIMITY** — This is the MOST IMPORTANT rule. Within each day, order
-   activities so consecutive stops are CLOSE TOGETHER. Cluster by neighbourhood:
-   - Start each day at or very near the accommodation.
-   - Pick breakfast within WALKING DISTANCE of the hotel (< 1 km).
-   - Group morning activities in the SAME neighbourhood. Pick lunch near those sights.
-   - Group afternoon activities in a SINGLE nearby area. Pick dinner near that area or
-     back near the hotel.
-   - NEVER jump across the city between consecutive items (e.g. don't go from a hotel
-     in Shinjuku to a café in Asakusa and back to Shibuya).
-   - Add the specific neighbourhood/district in each "location" field so proximity is
-     verifiable (e.g. "Café de Flore, Saint-Germain-des-Prés, Paris").
-2. **Name every restaurant/cafe/food stall specifically** — NEVER say "find a local restaurant"
-   or "try local food". Always give the real name (e.g. "Ichiran Ramen Shibuya", "Pizzeria Da
-   Michele", "Cafe de Flore").
-3. **Google Maps link for EVERY location** — format: https://www.google.com/maps/search/PLACE+NAME+CITY
-4. **Prices in local currency + USD** — e.g. "cost_local": "¥1500", "cost_usd": 10.
-   Use realistic local prices. A bowl of ramen in Tokyo is ~¥1000-1500 ($7-10), NOT $2000.
-5. Each day: 5-7 items including breakfast, lunch, dinner (all named specifically).
-6. Day 1 = arrival, last day = departure. Distribute cities evenly.
+1. **ROUTE-BASED DAILY PLANS** — This is the MOST IMPORTANT rule. Each day must follow
+   a geographic ROUTE (loop or linear) through 2-4 CONNECTED areas. Use the
+   "neighbourhood_travel" data to verify adjacency. Consecutive stops must be
+   in the SAME area or an ADJACENT area (connected in neighbourhood_travel).
+2. **Breakfast near the hotel** — always within walking distance of accommodation.
+3. **Lunch and dinner IN the area you're exploring** — pick restaurants from the
+   neighbourhood you're visiting at that time of day.
+4. **End-of-day return** — For loop routes, dinner near hotel. For linear routes,
+   end near a transit hub and note which line/bus/rideshare to take back.
+5. **Name every restaurant/cafe/food stall specifically** — NEVER say "find a local
+   restaurant". Always give the real name (e.g. "Ichiran Ramen Shibuya").
+6. **Google Maps link for EVERY location** — format: https://www.google.com/maps/search/PLACE+NAME+CITY
+7. **Prices in local currency + USD** — e.g. "cost_local": "¥1500", "cost_usd": 10.
+   Use realistic local prices.
+8. Each day: 5-7 items including breakfast, lunch, dinner (all named specifically).
+9. Day 1 = arrival, last day = departure. Distribute cities evenly.
+10. **Add a "route_type" field** to each day: "loop" or "linear", and a
+    "areas_visited" field listing the neighbourhoods in route order.
 
 Return a JSON array:
 [
@@ -740,6 +773,8 @@ Return a JSON array:
     "day_number": 1,
     "date": "YYYY-MM-DD",
     "city": "CityName",
+    "route_type": "loop",
+    "areas_visited": ["Neighbourhood A", "Neighbourhood B", "Neighbourhood A"],
     "items": [
       {{
         "start_time": "09:00",
@@ -935,7 +970,9 @@ class TripPlanner:
             tasks=tasks,
             process=Process.sequential,
             verbose=VERBOSE,
-            tracing=TRACING
+            tracing=TRACING,
+            memory=True,  # enables memory
+            cache=True,    # enables tool result caching
         )
         crew.kickoff()
         return _parse_crew_result(tasks, trip_data)

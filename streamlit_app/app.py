@@ -37,18 +37,66 @@ if "current_page" not in st.session_state:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def geocode_location(location: str, city: str):
-    """Geocode a location string. Returns (lat, lon) or None."""
-    try:
-        geolocator = Nominatim(user_agent="agentic-trip-planner-v1")
-        result = geolocator.geocode(f"{location}, {city}", timeout=5)
-        if result:
-            return (result.latitude, result.longitude)
-        # Fallback: try location alone
-        result = geolocator.geocode(location, timeout=5)
-        if result:
-            return (result.latitude, result.longitude)
-    except Exception:
-        pass
+    """Geocode a location string with progressive fallbacks.
+
+    Cleans noisy location strings (parentheticals, slashes, ampersands)
+    and tries increasingly simpler queries until Nominatim resolves one.
+    Rate-limit sleeps live *inside* the cached function so they only fire
+    on cache misses — subsequent Streamlit reruns return instantly.
+
+    Returns (lat, lon) or None.
+    """
+    import re
+    import time as _time
+
+    geolocator = Nominatim(user_agent="agentic-trip-planner-v1")
+
+    # ── Build a list of progressively simpler query strings ──────────
+    # 1. Strip parenthetical annotations  e.g. "(transit hub)"
+    cleaned = re.sub(r'\s*\([^)]*\)', '', location).strip()
+    # 2. Strip slash-alternatives          e.g. "Les Halles / Louvre area" → "Les Halles"
+    cleaned = re.sub(r'\s*/\s*[^,]+', '', cleaned).strip()
+
+    queries: list[str] = []
+
+    # a) Cleaned string + city context
+    queries.append(f"{cleaned}, {city}")
+
+    # b) If "&" present, keep only the first item  e.g. "Sacré-Cœur & Place du Tertre, Montmartre, Paris"
+    if '&' in cleaned:
+        first_part = cleaned.split('&')[0].strip().rstrip(',')
+        comma_parts = cleaned.split(',')
+        suffix = ', '.join(p.strip() for p in comma_parts[1:]) if len(comma_parts) > 1 else city
+        queries.append(f"{first_part}, {suffix}")
+
+    # c) Drop the specific venue name → area / neighbourhood + city
+    comma_parts = cleaned.split(',')
+    if len(comma_parts) >= 2:
+        queries.append(', '.join(p.strip() for p in comma_parts[1:]))
+
+    # d) Cleaned string alone (no city suffix)
+    queries.append(cleaned)
+
+    # e) Original raw string + city (in case cleaning removed something useful)
+    raw_with_city = f"{location}, {city}"
+    if raw_with_city != queries[0]:
+        queries.append(raw_with_city)
+
+    # ── Try each query, respecting Nominatim 1-req/s rate limit ──────
+    seen: set[str] = set()
+    for q in queries:
+        key = q.strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            _time.sleep(1.1)  # rate-limit (only runs on cache miss)
+            result = geolocator.geocode(q, timeout=5)
+            if result:
+                return (result.latitude, result.longitude)
+        except Exception:
+            continue
+
     return None
 
 
@@ -666,8 +714,9 @@ def show_itinerary():
                 # ── Google Maps widget ────────────────────────────────
                 destination = data.get("destination", "")
                 map_points = []
+                unmapped = []
                 with st.spinner("Mapping locations…"):
-                    for itm in items:
+                    for act_idx, itm in enumerate(items, 1):
                         loc = itm.get("location")
                         if loc:
                             coords = geocode_location(loc, destination)
@@ -678,7 +727,10 @@ def show_itinerary():
                                     "time": itm["start_time"],
                                     "lat": coords[0],
                                     "lon": coords[1],
+                                    "num": act_idx,   # preserve original activity number
                                 })
+                            else:
+                                unmapped.append(f"{act_idx}. {itm['title']} ({loc})")
 
                 if map_points:
                     avg_lat = sum(p["lat"] for p in map_points) / len(map_points)
@@ -691,16 +743,17 @@ def show_itinerary():
                         name="Google Maps",
                     ).add_to(m)
 
-                    for idx, pt in enumerate(map_points, 1):
+                    for pt in map_points:
+                        num = pt["num"]
                         folium.Marker(
                             location=[pt["lat"], pt["lon"]],
                             popup=folium.Popup(
-                                f"<b>{idx}. {pt['title']}</b><br>"
+                                f"<b>{num}. {pt['title']}</b><br>"
                                 f"🕐 {pt['time']}<br>"
                                 f"📍 {pt['location']}",
                                 max_width=250,
                             ),
-                            tooltip=f"{idx}. {pt['title']}",
+                            tooltip=f"{num}. {pt['title']}",
                             icon=folium.DivIcon(
                                 html=(
                                     f'<div style="font-size:14px;color:#fff;'
@@ -709,7 +762,7 @@ def show_itinerary():
                                     f'line-height:28px;font-weight:bold;'
                                     f'border:2px solid #fff;'
                                     f'box-shadow:0 2px 6px rgba(0,0,0,.3);"'
-                                    f'>{idx}</div>'
+                                    f'>{num}</div>'
                                 ),
                                 icon_size=(28, 28),
                                 icon_anchor=(14, 14),
@@ -727,7 +780,13 @@ def show_itinerary():
                         ).add_to(m)
 
                     st_folium(m, height=420, use_container_width=True,
-                              key=f"map_day_{selected_day_num}")
+                              key=f"map_day_{selected_day_num}",
+                              returned_objects=[])
+
+                    if unmapped:
+                        st.warning(
+                            "⚠️ Could not map: " + ", ".join(unmapped)
+                        )
                 else:
                     st.info("📍 No locations could be mapped for this day.")
 

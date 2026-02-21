@@ -272,6 +272,25 @@ def get_city_info(city_name):
             "top_attractions": ["Senso-ji Temple", "Tokyo Skytree", "Meiji Shrine", "Shibuya Crossing", "Tsukiji Outer Market"],
             "best_food": ["Sushi", "Ramen", "Tempura", "Yakitori", "Tonkatsu"],
             "local_transport": "JR Yamanote Line, Tokyo Metro",
+            "neighbourhood_travel": {
+                "_note": "Travel times in minutes between areas (walking / transit)",
+                "Shinjuku <-> Shibuya": {"walk": 25, "transit": 5, "line": "JR Yamanote"},
+                "Shinjuku <-> Harajuku / Omotesando": {"walk": 20, "transit": 4, "line": "JR Yamanote"},
+                "Shibuya <-> Harajuku / Omotesando": {"walk": 15, "transit": 3, "line": "JR Yamanote"},
+                "Harajuku / Omotesando <-> Ginza / Tsukiji": {"walk": 50, "transit": 15, "line": "Ginza Line"},
+                "Ginza / Tsukiji <-> Asakusa": {"walk": 60, "transit": 15, "line": "Ginza Line"},
+                "Asakusa <-> Ueno": {"walk": 15, "transit": 5, "line": "Ginza Line"},
+                "Ueno <-> Akihabara": {"walk": 12, "transit": 3, "line": "JR Yamanote"},
+                "Akihabara <-> Ginza / Tsukiji": {"walk": 25, "transit": 8, "line": "Hibiya Line"},
+                "Shinjuku <-> Akihabara": {"walk": 70, "transit": 15, "line": "JR Chuo"},
+                "Shibuya <-> Ginza / Tsukiji": {"walk": 55, "transit": 15, "line": "Ginza Line"}
+            },
+            "suggested_routes": [
+                {"type": "loop", "name": "West Tokyo loop", "areas": ["Shinjuku", "Harajuku / Omotesando", "Shibuya", "Shinjuku"], "note": "All walkable, great half-day loop"},
+                {"type": "linear", "name": "East Tokyo line", "areas": ["Ueno", "Akihabara", "Ginza / Tsukiji", "Asakusa"], "note": "Take Ginza Line back to hotel"},
+                {"type": "linear", "name": "Cross-city day", "areas": ["Shinjuku", "Harajuku / Omotesando", "Ginza / Tsukiji", "Asakusa"], "note": "Take JR Yamanote back from Ueno"}
+            ],
+            "transit_hubs": ["Shinjuku Station", "Shibuya Station", "Tokyo Station", "Ueno Station"],
             "neighbourhoods": {
                 "Shinjuku": {
                     "vibe": "Nightlife, shopping, skyscrapers",
@@ -316,6 +335,23 @@ def get_city_info(city_name):
             "top_attractions": ["Eiffel Tower", "Louvre Museum", "Notre-Dame", "Arc de Triomphe", "Montmartre"],
             "best_food": ["Croissants", "Steak Frites", "Crepes", "Macarons", "French Onion Soup"],
             "local_transport": "Metro, RER, Bus",
+            "neighbourhood_travel": {
+                "_note": "Travel times in minutes between areas (walking / transit)",
+                "Le Marais (3rd-4th arr.) <-> Louvre / Les Halles (1st-2nd arr.)": {"walk": 15, "transit": 5, "line": "M1"},
+                "Louvre / Les Halles (1st-2nd arr.) <-> Saint-Germain-des-Prés (6th arr.)": {"walk": 15, "transit": 5, "line": "M4"},
+                "Saint-Germain-des-Prés (6th arr.) <-> Latin Quarter (5th arr.)": {"walk": 10, "transit": 3, "line": "walk"},
+                "Louvre / Les Halles (1st-2nd arr.) <-> Champs-Élysées / Trocadéro (8th/16th arr.)": {"walk": 30, "transit": 8, "line": "M1"},
+                "Champs-Élysées / Trocadéro (8th/16th arr.) <-> Montmartre (18th arr.)": {"walk": 45, "transit": 12, "line": "M2"},
+                "Le Marais (3rd-4th arr.) <-> Latin Quarter (5th arr.)": {"walk": 20, "transit": 8, "line": "M7"},
+                "Le Marais (3rd-4th arr.) <-> Montmartre (18th arr.)": {"walk": 50, "transit": 15, "line": "M12"},
+                "Louvre / Les Halles (1st-2nd arr.) <-> Montmartre (18th arr.)": {"walk": 35, "transit": 10, "line": "M4"}
+            },
+            "suggested_routes": [
+                {"type": "loop", "name": "Central Paris loop", "areas": ["Le Marais (3rd-4th arr.)", "Louvre / Les Halles (1st-2nd arr.)", "Saint-Germain-des-Prés (6th arr.)", "Latin Quarter (5th arr.)", "Le Marais (3rd-4th arr.)"], "note": "All walkable, classic Paris walk"},
+                {"type": "linear", "name": "Landmarks line", "areas": ["Louvre / Les Halles (1st-2nd arr.)", "Champs-Élysées / Trocadéro (8th/16th arr.)", "Montmartre (18th arr.)"], "note": "Take M2/M12 back"},
+                {"type": "loop", "name": "Left Bank loop", "areas": ["Saint-Germain-des-Prés (6th arr.)", "Latin Quarter (5th arr.)", "Le Marais (3rd-4th arr.)", "Louvre / Les Halles (1st-2nd arr.)", "Saint-Germain-des-Prés (6th arr.)"], "note": "Leisurely walk along the Seine"}
+            ],
+            "transit_hubs": ["Châtelet-Les Halles", "Gare du Nord", "Saint-Lazare", "Montparnasse"],
             "neighbourhoods": {
                 "Le Marais (3rd-4th arr.)": {
                     "vibe": "Trendy, historic, LGBTQ-friendly",
@@ -355,6 +391,23 @@ def get_city_info(city_name):
             "top_attractions": ["Big Ben", "Tower of London", "British Museum", "London Eye", "Buckingham Palace"],
             "best_food": ["Fish and Chips", "Sunday Roast", "Afternoon Tea", "Curry", "Pie and Mash"],
             "local_transport": "Tube, Bus, Overground",
+            "neighbourhood_travel": {
+                "_note": "Travel times in minutes between areas (walking / transit)",
+                "Westminster / South Bank <-> The City / Tower": {"walk": 30, "transit": 10, "line": "District/Circle"},
+                "Westminster / South Bank <-> Bloomsbury / Covent Garden": {"walk": 25, "transit": 8, "line": "Northern Line"},
+                "Bloomsbury / Covent Garden <-> Soho / Mayfair": {"walk": 10, "transit": 3, "line": "walk"},
+                "Soho / Mayfair <-> South Kensington / Chelsea": {"walk": 35, "transit": 10, "line": "Piccadilly"},
+                "The City / Tower <-> Shoreditch / Brick Lane": {"walk": 15, "transit": 5, "line": "Overground"},
+                "Bloomsbury / Covent Garden <-> The City / Tower": {"walk": 25, "transit": 8, "line": "Central Line"},
+                "Westminster / South Bank <-> Soho / Mayfair": {"walk": 20, "transit": 5, "line": "Jubilee"},
+                "Soho / Mayfair <-> Bloomsbury / Covent Garden": {"walk": 10, "transit": 3, "line": "walk"}
+            },
+            "suggested_routes": [
+                {"type": "loop", "name": "Central London loop", "areas": ["Westminster / South Bank", "Bloomsbury / Covent Garden", "Soho / Mayfair", "Westminster / South Bank"], "note": "Walkable riverside loop"},
+                {"type": "linear", "name": "East London line", "areas": ["Bloomsbury / Covent Garden", "The City / Tower", "Shoreditch / Brick Lane"], "note": "Take Overground or bus back"},
+                {"type": "linear", "name": "Museum mile", "areas": ["South Kensington / Chelsea", "Soho / Mayfair", "Bloomsbury / Covent Garden"], "note": "Walk or take Piccadilly Line"}
+            ],
+            "transit_hubs": ["King's Cross St Pancras", "Waterloo", "Liverpool Street", "Paddington"],
             "neighbourhoods": {
                 "Westminster / South Bank": {
                     "vibe": "Landmarks, government, river views",
@@ -394,6 +447,22 @@ def get_city_info(city_name):
             "top_attractions": ["Statue of Liberty", "Central Park", "Times Square", "Empire State Building", "Brooklyn Bridge"],
             "best_food": ["Pizza", "Bagels", "Cheesecake", "Hot Dogs", "Pastrami Sandwich"],
             "local_transport": "Subway, Bus, Taxi",
+            "neighbourhood_travel": {
+                "_note": "Travel times in minutes between areas (walking / transit)",
+                "Midtown Manhattan <-> Upper West Side / Central Park": {"walk": 25, "transit": 8, "line": "1/2/3 subway"},
+                "Midtown Manhattan <-> SoHo / Greenwich Village": {"walk": 30, "transit": 10, "line": "1 subway"},
+                "SoHo / Greenwich Village <-> Lower Manhattan / FiDi": {"walk": 20, "transit": 8, "line": "1 subway"},
+                "Lower Manhattan / FiDi <-> Williamsburg (Brooklyn)": {"walk": 40, "transit": 15, "line": "J/M/Z subway"},
+                "SoHo / Greenwich Village <-> Williamsburg (Brooklyn)": {"walk": 50, "transit": 15, "line": "L subway"},
+                "Midtown Manhattan <-> Lower Manhattan / FiDi": {"walk": 50, "transit": 15, "line": "2/3 express"},
+                "Upper West Side / Central Park <-> SoHo / Greenwich Village": {"walk": 50, "transit": 15, "line": "1 subway"}
+            },
+            "suggested_routes": [
+                {"type": "linear", "name": "Downtown to Midtown", "areas": ["Lower Manhattan / FiDi", "SoHo / Greenwich Village", "Midtown Manhattan"], "note": "Walk north through Manhattan"},
+                {"type": "loop", "name": "Midtown & Park loop", "areas": ["Midtown Manhattan", "Upper West Side / Central Park", "Midtown Manhattan"], "note": "Walk through Central Park"},
+                {"type": "linear", "name": "Brooklyn adventure", "areas": ["Lower Manhattan / FiDi", "Williamsburg (Brooklyn)"], "note": "Walk Brooklyn Bridge, subway back"}
+            ],
+            "transit_hubs": ["Penn Station", "Grand Central", "Times Square-42nd St", "Fulton Center"],
             "neighbourhoods": {
                 "Midtown Manhattan": {
                     "vibe": "Skyscrapers, Broadway, iconic landmarks",
@@ -428,6 +497,22 @@ def get_city_info(city_name):
             "top_attractions": ["Sagrada Familia", "Park Guell", "La Rambla", "Gothic Quarter", "Casa Batllo"],
             "best_food": ["Tapas", "Paella", "Churros", "Jamón Ibérico", "Crema Catalana"],
             "local_transport": "Metro, Bus, Tram",
+            "neighbourhood_travel": {
+                "_note": "Travel times in minutes between areas (walking / transit)",
+                "Gothic Quarter (Barri Gòtic) <-> El Born": {"walk": 10, "transit": 3, "line": "walk"},
+                "Gothic Quarter (Barri Gòtic) <-> Eixample": {"walk": 15, "transit": 5, "line": "L3"},
+                "El Born <-> Barceloneta": {"walk": 10, "transit": 3, "line": "L4"},
+                "Eixample <-> Gràcia": {"walk": 20, "transit": 5, "line": "L3"},
+                "Gothic Quarter (Barri Gòtic) <-> Barceloneta": {"walk": 15, "transit": 5, "line": "L4"},
+                "El Born <-> Eixample": {"walk": 20, "transit": 8, "line": "L1"},
+                "Gràcia <-> Gothic Quarter (Barri Gòtic)": {"walk": 35, "transit": 12, "line": "L3"}
+            },
+            "suggested_routes": [
+                {"type": "loop", "name": "Old City loop", "areas": ["Gothic Quarter (Barri Gòtic)", "El Born", "Barceloneta", "Gothic Quarter (Barri Gòtic)"], "note": "All walkable, half-day"},
+                {"type": "linear", "name": "Gaudí trail", "areas": ["Gothic Quarter (Barri Gòtic)", "Eixample", "Gràcia"], "note": "Take L3 back from Gràcia"},
+                {"type": "loop", "name": "Full city loop", "areas": ["Gothic Quarter (Barri Gòtic)", "Eixample", "Gràcia", "Eixample", "El Born", "Gothic Quarter (Barri Gòtic)"], "note": "Full day with metro help"}
+            ],
+            "transit_hubs": ["Plaça Catalunya", "Passeig de Gràcia", "Sants Estació", "Arc de Triomf"],
             "neighbourhoods": {
                 "Gothic Quarter (Barri Gòtic)": {
                     "vibe": "Medieval streets, historic, central",
