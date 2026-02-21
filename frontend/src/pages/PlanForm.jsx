@@ -55,14 +55,6 @@ const itemVariants = {
     },
 }
 
-function buildVibeText(upvotedIds, downvotedIds) {
-    const parts = []
-    const upVibes = upvotedIds.map((id) => MOOD_DATA[id]?.vibe).filter(Boolean)
-    const downVibes = downvotedIds.map((id) => MOOD_DATA[id]?.vibe).filter(Boolean)
-    if (upVibes.length) parts.push(`I love: ${upVibes.join(', ')}`)
-    if (downVibes.length) parts.push(`Not for me: ${downVibes.join(', ')}`)
-    return parts.join('. ')
-}
 
 export default function PlanForm() {
     const [searchParams] = useSearchParams()
@@ -72,13 +64,7 @@ export default function PlanForm() {
     const destination = searchParams.get('destination') || 'Your destination'
     const moodId = searchParams.get('mood') || '1'
     const mood = MOOD_DATA[moodId] || MOOD_DATA[1]
-
-    // Build initial vibe from URL params (populated by "Continue with your vibes")
-    const upvotedParam = searchParams.get('upvoted') || ''
-    const downvotedParam = searchParams.get('downvoted') || ''
-    const upvotedIds = upvotedParam ? upvotedParam.split(',').filter(Boolean) : []
-    const downvotedIds = downvotedParam ? downvotedParam.split(',').filter(Boolean) : []
-    const initialVibe = buildVibeText(upvotedIds, downvotedIds)
+    const initialVibe = searchParams.get('vibe') || ''
 
     const today = new Date().toISOString().split('T')[0]
 
@@ -251,11 +237,11 @@ export default function PlanForm() {
                             <h2 className="plan__section-title">Your vibe</h2>
                             <span className="plan__required-tag">required</span>
                         </div>
-                        <input
+                        <textarea
                             id="vibe"
-                            type="text"
                             name="vibe"
-                            className={`plan__input ${errors.vibe ? 'plan__input--error' : ''}`}
+                            rows={3}
+                            className={`plan__input plan__textarea plan__textarea--vibe ${errors.vibe ? 'plan__input--error' : ''}`}
                             placeholder="Describe the vibe you're looking for..."
                             value={form.vibe}
                             onChange={handleChange}

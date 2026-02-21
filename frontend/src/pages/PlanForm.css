@@ -319,6 +319,12 @@
     line-height: 1.6;
 }
 
+.plan__textarea--vibe {
+    resize: none;
+    min-height: calc(1.6em * 3 + 28px); /* 3 lines fallback */
+    field-sizing: content;
+}
+
 /* Submit */
 .plan__submit {
     display: inline-flex;

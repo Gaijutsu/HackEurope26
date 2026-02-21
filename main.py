@@ -1,12 +1,14 @@
 """FastAPI Backend - Hackathon Edition with CrewAI Agents"""
 import os
 import json
+import uuid
+import shutil
 
 # Load .env before anything else
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
@@ -29,6 +31,10 @@ app = FastAPI(
     description="Hackathon version - Multi-agent trip planning with CrewAI",
     version="2.0.0"
 )
+
+# Pinterest image storage — reuse frontend/public so mock data is available
+PINTEREST_DIR = os.path.join(os.path.dirname(__file__), "frontend", "public", "pinterest")
+os.makedirs(PINTEREST_DIR, exist_ok=True)
 
 # CORS
 app.add_middleware(
@@ -815,6 +821,37 @@ def select_accommodation(trip_id: str, acc_id: str, user_id: str):
 
 
 # Search endpoints
+@app.get("/pinterest")
+async def pinterest_images(
+    city: str = Query(..., description="City name"),
+    country: str = Query(..., description="Country name"),
+):
+    """Fetch Pinterest-style travel images for a city."""
+    from pinterest_dl import PinterestDL
+
+    if city == "Mock" and country == "United States":
+        batch_id = "mock"
+        download_dir = os.path.join(PINTEREST_DIR, batch_id)
+        image_files = sorted(os.listdir(download_dir))
+        return [f"/pinterest/{batch_id}/{fname}" for fname in image_files]
+
+    query = f"photos of {city} {country}"
+    batch_id = uuid.uuid4().hex[:8]
+    download_dir = os.path.join(PINTEREST_DIR, batch_id)
+    os.makedirs(download_dir, exist_ok=True)
+    try:
+        PinterestDL.with_api().search_and_download(
+            query=query,
+            output_dir=download_dir,
+            num=20,
+        )
+        image_files = sorted(os.listdir(download_dir))
+        return [f"/pinterest/{batch_id}/{fname}" for fname in image_files]
+    except Exception as e:
+        shutil.rmtree(download_dir, ignore_errors=True)
+        raise HTTPException(status_code=502, detail=str(e))
+
+
 @app.get("/search/cities")
 def search_cities(q: str):
     db = get_db()
@@ -839,8 +876,18 @@ class VibeRequest(BaseModel):
 def get_vibe(request: VibeRequest):
     """Generate a short trip-vibe description from upvoted/downvoted image paths."""
     from vibe_generator import generate_vibe
+
+    def resolve(path: str) -> str:
+        """Convert a /pinterest/... URL path to its filesystem location."""
+        if path.startswith("/pinterest/"):
+            return os.path.join(PINTEREST_DIR, path[len("/pinterest/"):])
+        return path
+
     try:
-        vibe = generate_vibe(request.upvoted, request.downvoted)
+        vibe = generate_vibe(
+            [resolve(p) for p in request.upvoted],
+            [resolve(p) for p in request.downvoted],
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=f"Image not found: {e}")
     except Exception as e:

@@ -43,3 +43,6 @@ folium>=0.15.0
 streamlit-folium>=0.18.0
 geopy>=2.4.0
 icalendar>=5.0.0
+
+# Pinterest image scraping
+pinterest-dl>=0.7.0

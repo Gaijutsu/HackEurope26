@@ -3,23 +3,36 @@
 import os
 import base64
 from pathlib import Path
+from urllib.parse import urlparse
 
+import httpx
 from openai import OpenAI
 
 
-def _encode_image(path: str) -> tuple[str, str]:
-    """Return (base64_data, media_type) for a local image file."""
-    ext = Path(path).suffix.lower()
-    mime = {
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-    }.get(ext, "image/jpeg")
+def _encode_image(source: str) -> tuple[str, str]:
+    """Return (base64_data, media_type) for a local file path or a remote URL."""
+    parsed = urlparse(source)
+    is_url = parsed.scheme in ("http", "https")
 
-    with open(path, "rb") as f:
-        data = base64.standard_b64encode(f.read()).decode("utf-8")
+    if is_url:
+        response = httpx.get(source, timeout=10, follow_redirects=True)
+        response.raise_for_status()
+        raw = response.content
+        content_type = response.headers.get("content-type", "image/jpeg")
+        mime = content_type.split(";")[0].strip()
+    else:
+        ext = Path(source).suffix.lower()
+        mime = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+        }.get(ext, "image/jpeg")
+        with open(source, "rb") as f:
+            raw = f.read()
+
+    data = base64.standard_b64encode(raw).decode("utf-8")
     return data, mime
 
 

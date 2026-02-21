@@ -53,6 +53,7 @@ export default function Landing() {
     const [cityValid, setCityValid] = useState(false)
     const [searched, setSearched] = useState(false)
     const [isLoadingImages, setIsLoadingImages] = useState(false)
+    const [isGeneratingVibe, setIsGeneratingVibe] = useState(false)
     const [moodBoards, setMoodBoards] = useState([])
     // Map of index -> 'upvoted' | 'downvoted' | 'neither'
     const [votes, setVotes] = useState({})
@@ -120,12 +121,31 @@ export default function Landing() {
 
     const getVoteState = (id) => votes[id] || 'neither'
 
-    const handleSubmit = () => {
-        const upvoted = getUpvotedCards().map((m) => m.id)
-        const downvoted = getDownvotedCards().map((m) => m.id)
+    const handleSubmit = async () => {
+        const upvotedCards = getUpvotedCards()
+        const downvotedCards = getDownvotedCards()
+
+        setIsGeneratingVibe(true)
+        let vibe = ''
+        try {
+            const response = await fetch('http://localhost:8000/vibe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    upvoted: upvotedCards.map((m) => m.image),
+                    downvoted: downvotedCards.map((m) => m.image),
+                }),
+            })
+            const data = await response.json()
+            vibe = data.vibe || ''
+        } catch (err) {
+            console.error('Failed to generate vibe:', err)
+        } finally {
+            setIsGeneratingVibe(false)
+        }
+
         const params = new URLSearchParams({ destination })
-        if (upvoted.length) params.set('upvoted', upvoted.join(','))
-        if (downvoted.length) params.set('downvoted', downvoted.join(','))
+        if (vibe) params.set('vibe', vibe)
         navigate(`/plan?${params.toString()}`)
     }
 
@@ -290,27 +310,37 @@ export default function Landing() {
                                     type="button"
                                     className="landing__submit-btn"
                                     onClick={handleSubmit}
-                                    disabled={!hasVotes}
+                                    disabled={!hasVotes || isGeneratingVibe}
                                 >
-                                    <span>Continue with your vibes</span>
-                                    <svg
-                                        width="20"
-                                        height="20"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        strokeWidth="2"
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                    >
-                                        <path d="M5 12h14" />
-                                        <path d="m12 5 7 7-7 7" />
-                                    </svg>
+                                    {isGeneratingVibe ? (
+                                        <>
+                                            <span className="landing__spinner" />
+                                            <span>Reading your vibe...</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <span>Continue with your vibes</span>
+                                            <svg
+                                                width="20"
+                                                height="20"
+                                                viewBox="0 0 24 24"
+                                                fill="none"
+                                                stroke="currentColor"
+                                                strokeWidth="2"
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                            >
+                                                <path d="M5 12h14" />
+                                                <path d="m12 5 7 7-7 7" />
+                                            </svg>
+                                        </>
+                                    )}
                                 </button>
                                 <button
                                     type="button"
                                     className="landing__skip-btn"
                                     onClick={handleSkipToNext}
+                                    disabled={isGeneratingVibe}
                                 >
                                     <span>I already know my vibe</span>
                                     <svg
