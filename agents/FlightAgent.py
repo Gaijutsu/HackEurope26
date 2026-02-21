@@ -40,7 +40,16 @@ def search_flights(
         }
         if return_date:
             params["returnDate"] = return_date
-        return _amadeus.shopping.flight_offers_search.get(**params).data
+        response = _amadeus.shopping.flight_offers_search.get(**params)
+        # Attach carrier-name dictionary so the normalizer can resolve codes
+        carriers = {}
+        try:
+            carriers = response.result.get("dictionaries", {}).get("carriers", {})
+        except Exception:
+            pass
+        for offer in response.data:
+            offer["_carriers"] = carriers
+        return response.data
     except ResponseError as e:
         return [{"error": str(e)}]
 

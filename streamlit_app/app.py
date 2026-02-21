@@ -5,6 +5,13 @@ import streamlit as st
 import requests
 import json
 import time
+import io
+from datetime import datetime, timedelta
+
+import folium
+from streamlit_folium import st_folium
+from geopy.geocoders import Nominatim
+from icalendar import Calendar, Event as ICalEvent
 
 # Configure page
 st.set_page_config(
@@ -24,6 +31,63 @@ if "token" not in st.session_state:
     st.session_state.token = None
 if "current_page" not in st.session_state:
     st.session_state.current_page = "login"
+
+
+# ── Helpers: geocoding & iCal ───────────────────────────────────────────────
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def geocode_location(location: str, city: str):
+    """Geocode a location string. Returns (lat, lon) or None."""
+    try:
+        geolocator = Nominatim(user_agent="agentic-trip-planner-v1")
+        result = geolocator.geocode(f"{location}, {city}", timeout=5)
+        if result:
+            return (result.latitude, result.longitude)
+        # Fallback: try location alone
+        result = geolocator.geocode(location, timeout=5)
+        if result:
+            return (result.latitude, result.longitude)
+    except Exception:
+        pass
+    return None
+
+
+def generate_ical(trip_info: dict, days: list) -> bytes:
+    """Generate an iCal (.ics) file from trip itinerary data."""
+    cal = Calendar()
+    cal.add("prodid", "-//Agentic Trip Planner//EN")
+    cal.add("version", "2.0")
+    cal.add("calscale", "GREGORIAN")
+    cal.add("x-wr-calname", trip_info.get("title", "Trip Itinerary"))
+
+    trip_start = datetime.strptime(trip_info["start_date"], "%Y-%m-%d")
+
+    for day in days:
+        day_num = day["day_number"]
+        event_date = trip_start + timedelta(days=day_num - 1)
+
+        for item in day.get("items", []):
+            ev = ICalEvent()
+            ev.add("summary", item["title"])
+            ev.add("description", item.get("description", ""))
+
+            try:
+                h, m = item["start_time"].split(":")[:2]
+                ev_start = event_date.replace(hour=int(h), minute=int(m))
+            except (ValueError, IndexError, AttributeError):
+                ev_start = event_date.replace(hour=9, minute=0)
+
+            ev.add("dtstart", ev_start)
+            ev.add("dtend", ev_start + timedelta(minutes=item.get("duration_minutes", 60)))
+
+            if item.get("location"):
+                ev.add("location", item["location"])
+
+            ev.add("uid", f"{item.get('id', 'item')}@agentic-trip-planner")
+            cal.add_component(ev)
+
+    return cal.to_ical()
+
 
 # Sidebar navigation
 def sidebar():
@@ -574,7 +638,18 @@ def show_itinerary():
             if not days:
                 st.info("No itinerary items yet. Start planning first!")
                 return
-            
+
+            # ── iCal download ────────────────────────────────────────
+            if trip_response.status_code == 200:
+                ical_bytes = generate_ical(trip, days)
+                safe_name = trip.get("title", "trip").replace(" ", "_")
+                st.download_button(
+                    label="📅 Download iCal (.ics)",
+                    data=ical_bytes,
+                    file_name=f"{safe_name}.ics",
+                    mime="text/calendar",
+                )
+
             # Day selector
             day_options = [f"Day {d['day_number']}" for d in days]
             selected_day = st.selectbox("Select Day", day_options)
@@ -587,7 +662,77 @@ def show_itinerary():
                 items = day_data["items"]
                 
                 st.subheader(f"Day {selected_day_num} - {len(items)} activities")
-                
+
+                # ── Google Maps widget ────────────────────────────────
+                destination = data.get("destination", "")
+                map_points = []
+                with st.spinner("Mapping locations…"):
+                    for itm in items:
+                        loc = itm.get("location")
+                        if loc:
+                            coords = geocode_location(loc, destination)
+                            if coords:
+                                map_points.append({
+                                    "title": itm["title"],
+                                    "location": loc,
+                                    "time": itm["start_time"],
+                                    "lat": coords[0],
+                                    "lon": coords[1],
+                                })
+
+                if map_points:
+                    avg_lat = sum(p["lat"] for p in map_points) / len(map_points)
+                    avg_lon = sum(p["lon"] for p in map_points) / len(map_points)
+
+                    m = folium.Map(location=[avg_lat, avg_lon], zoom_start=13, tiles=None)
+                    folium.TileLayer(
+                        tiles="https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}",
+                        attr="Google",
+                        name="Google Maps",
+                    ).add_to(m)
+
+                    for idx, pt in enumerate(map_points, 1):
+                        folium.Marker(
+                            location=[pt["lat"], pt["lon"]],
+                            popup=folium.Popup(
+                                f"<b>{idx}. {pt['title']}</b><br>"
+                                f"🕐 {pt['time']}<br>"
+                                f"📍 {pt['location']}",
+                                max_width=250,
+                            ),
+                            tooltip=f"{idx}. {pt['title']}",
+                            icon=folium.DivIcon(
+                                html=(
+                                    f'<div style="font-size:14px;color:#fff;'
+                                    f'background:#e74c3c;border-radius:50%;'
+                                    f'width:28px;height:28px;text-align:center;'
+                                    f'line-height:28px;font-weight:bold;'
+                                    f'border:2px solid #fff;'
+                                    f'box-shadow:0 2px 6px rgba(0,0,0,.3);"'
+                                    f'>{idx}</div>'
+                                ),
+                                icon_size=(28, 28),
+                                icon_anchor=(14, 14),
+                            ),
+                        ).add_to(m)
+
+                    # Dashed route line connecting activities in order
+                    if len(map_points) > 1:
+                        folium.PolyLine(
+                            locations=[(p["lat"], p["lon"]) for p in map_points],
+                            color="#3498db",
+                            weight=3,
+                            opacity=0.7,
+                            dash_array="10",
+                        ).add_to(m)
+
+                    st_folium(m, height=420, use_container_width=True,
+                              key=f"map_day_{selected_day_num}")
+                else:
+                    st.info("📍 No locations could be mapped for this day.")
+
+                st.divider()
+
                 # Display items
                 for item in items:
                     with st.container():

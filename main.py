@@ -8,12 +8,14 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from passlib.context import CryptContext
 from jose import JWTError, jwt
+
+from icalendar import Calendar, Event as ICalEvent
 
 from database import init_db, get_db, User, Trip, ItineraryItem, Flight, Accommodation, City
 from agents import planning_agent
@@ -508,6 +510,58 @@ def complete_item(trip_id: str, item_id: str, user_id: str):
     db.commit()
     
     return {"message": "Item marked as completed"}
+
+
+@app.get("/trips/{trip_id}/ical")
+def get_trip_ical(trip_id: str, user_id: str):
+    """Download an iCal (.ics) file for the trip itinerary."""
+    db = get_db()
+    trip = db.query(Trip).filter(Trip.id == trip_id, Trip.user_id == user_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    items = db.query(ItineraryItem).filter(
+        ItineraryItem.trip_id == trip_id
+    ).order_by(ItineraryItem.day_number, ItineraryItem.start_time).all()
+
+    cal = Calendar()
+    cal.add("prodid", "-//Agentic Trip Planner//EN")
+    cal.add("version", "2.0")
+    cal.add("calscale", "GREGORIAN")
+    cal.add("x-wr-calname", trip.title)
+
+    trip_start = datetime.strptime(trip.start_date, "%Y-%m-%d")
+
+    for item in items:
+        ev = ICalEvent()
+        ev.add("summary", item.title)
+        ev.add("description", item.description or "")
+
+        event_date = trip_start + timedelta(days=item.day_number - 1)
+        try:
+            parts = item.start_time.split(":")
+            hour, minute = int(parts[0]), int(parts[1])
+            ev_start = event_date.replace(hour=hour, minute=minute)
+        except (ValueError, IndexError, AttributeError):
+            ev_start = event_date.replace(hour=9, minute=0)
+
+        ev.add("dtstart", ev_start)
+        ev.add("dtend", ev_start + timedelta(minutes=item.duration_minutes or 60))
+
+        if item.location:
+            ev.add("location", item.location)
+
+        ev.add("uid", f"{item.id}@agentic-trip-planner")
+        cal.add_component(ev)
+
+    ics_bytes = cal.to_ical()
+    safe_title = trip.title.replace(" ", "_")
+    return Response(
+        content=ics_bytes,
+        media_type="text/calendar",
+        headers={"Content-Disposition": f'attachment; filename="{safe_title}.ics"'},
+    )
+
 
 # Flight endpoints
 @app.get("/trips/{trip_id}/flights")
