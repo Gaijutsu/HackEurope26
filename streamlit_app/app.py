@@ -178,12 +178,8 @@ def main():
         show_create_trip()
     elif st.session_state.current_page == "planning":
         show_planning()
-    elif st.session_state.current_page == "itinerary":
-        show_itinerary()
-    elif st.session_state.current_page == "flights":
-        show_flights()
-    elif st.session_state.current_page == "accommodations":
-        show_accommodations()
+    elif st.session_state.current_page in ("itinerary", "flights", "accommodations", "trip_plan"):
+        show_trip_plan()
 
 def show_login():
     st.title("Welcome to Agentic Trip Planner 🤖✈️")
@@ -328,7 +324,7 @@ def show_dashboard():
                             with col1:
                                 if st.button("View", key=f"view_{trip['id']}", use_container_width=True):
                                     st.session_state.current_trip_id = trip["id"]
-                                    st.session_state.current_page = "itinerary"
+                                    st.session_state.current_page = "trip_plan"
                                     st.rerun()
                             with col2:
                                 if st.button("Delete", key=f"del_{trip['id']}", use_container_width=True):
@@ -486,8 +482,10 @@ def show_planning():
     AGENTS = [
         ("🔍", "Destination Researcher", "Researching your destination with web search"),
         ("🏙️", "City Selector", "Choosing optimal cities to visit"),
+        ("💎", "Local Hidden Gems Expert", "Finding authentic local places beyond tourist traps"),
         ("✈️", "Flight Finder", "Searching for the best flights"),
         ("🏨", "Accommodation Finder", "Finding perfect places to stay"),
+        ("🗺️", "Local Travel Advisor", "Compiling local travel tips & apps"),
         ("📅", "Itinerary Planner", "Building your day-by-day plan"),
     ]
     
@@ -508,19 +506,9 @@ def show_planning():
             if status == "completed":
                 st.success("✅ Planning already completed!")
                 st.balloons()
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    if st.button("📅 View Itinerary", type="primary", use_container_width=True):
-                        st.session_state.current_page = "itinerary"
-                        st.rerun()
-                with col2:
-                    if st.button("✈️ View Flights", use_container_width=True):
-                        st.session_state.current_page = "flights"
-                        st.rerun()
-                with col3:
-                    if st.button("🏨 View Hotels", use_container_width=True):
-                        st.session_state.current_page = "accommodations"
-                        st.rerun()
+                if st.button("📋 View Trip Plan", type="primary", use_container_width=True):
+                    st.session_state.current_page = "trip_plan"
+                    st.rerun()
                 return
             
             # Show agent pipeline
@@ -568,7 +556,7 @@ def show_planning():
                     )
                     if plan_response.status_code == 200:
                         st.success("✅ Planning completed!")
-                        st.session_state.current_page = "itinerary"
+                        st.session_state.current_page = "trip_plan"
                         st.rerun()
                     else:
                         st.error("Planning failed.")
@@ -600,7 +588,7 @@ def show_planning():
                             st.write(f"✅ **Orchestrator**: Trip planning complete!")
                         time.sleep(1)
                         st.balloons()
-                        st.session_state.current_page = "itinerary"
+                        st.session_state.current_page = "trip_plan"
                         st.rerun()
                         return
                     
@@ -613,17 +601,19 @@ def show_planning():
                     agent_order = {
                         "DestinationResearcher": 1,
                         "CitySelector": 2,
-                        "FlightFinder": 3,
-                        "AccommodationFinder": 4,
-                        "ItineraryPlanner": 5,
+                        "LocalExpert": 3,
+                        "FlightFinder": 4,
+                        "AccommodationFinder": 5,
+                        "LocalTravelAdvisor": 6,
+                        "ItineraryPlanner": 7,
                     }
                     agent_idx = agent_order.get(agent_name, 0)
                     if agent_status == "running":
-                        pct = int((agent_idx - 1) / 5 * 100)
+                        pct = int((agent_idx - 1) / 7 * 100)
                         progress_bar.progress(min(pct, 95))
                         status_text.info(f"🔄 **{agent_name}**: {message}")
                     elif agent_status == "done":
-                        pct = int(agent_idx / 5 * 100)
+                        pct = int(agent_idx / 7 * 100)
                         progress_bar.progress(min(pct, 95))
                         status_text.success(f"✅ **{agent_name}**: {message}")
                     elif agent_status == "skipped":
@@ -638,7 +628,7 @@ def show_planning():
                             st.write(f"⏭️ **{agent_name}**: {message}")
                 
                 # If we got here without a complete event, check status
-                st.session_state.current_page = "itinerary"
+                st.session_state.current_page = "trip_plan"
                 st.rerun()
                 
             except requests.exceptions.Timeout:
@@ -648,411 +638,555 @@ def show_planning():
     except Exception as e:
         st.error(f"Error: {str(e)}")
 
-def show_itinerary():
+def show_trip_plan():
+    """Unified trip view with three main tabs: Flights, Accommodation, Itineraries."""
     if not st.session_state.user:
         st.session_state.current_page = "login"
         st.rerun()
         return
-    
+
     trip_id = st.session_state.get("current_trip_id")
     if not trip_id:
         st.error("No trip selected")
         return
-    
-    st.title("📅 Your Itinerary")
-    
+
+    st.title("📋 Your Trip Plan")
+
     try:
         # Get trip details
         trip_response = requests.get(
             f"{API_URL}/trips/{trip_id}",
             params={"user_id": st.session_state.user["id"]}
         )
-        
-        if trip_response.status_code == 200:
-            trip = trip_response.json()
-            st.write(f"### {trip['title']}")
-            st.write(f"📍 {trip['destination']}")
-        
-        # Get itinerary
-        response = requests.get(
-            f"{API_URL}/trips/{trip_id}/itinerary",
-            params={"user_id": st.session_state.user["id"]}
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            days = data.get("days", [])
-            
-            if not days:
-                st.info("No itinerary items yet. Start planning first!")
-                return
 
-            # ── iCal download ────────────────────────────────────────
-            if trip_response.status_code == 200:
-                ical_bytes = generate_ical(trip, days)
-                safe_name = trip.get("title", "trip").replace(" ", "_")
-                st.download_button(
-                    label="📅 Download iCal (.ics)",
-                    data=ical_bytes,
-                    file_name=f"{safe_name}.ics",
-                    mime="text/calendar",
+        if trip_response.status_code != 200:
+            st.error("Failed to load trip")
+            return
+
+        trip = trip_response.json()
+        st.write(f"### {trip['title']}")
+        st.write(f"📍 {trip['destination']} | 📅 {trip['start_date']} to {trip['end_date']}")
+        st.divider()
+
+        plan_data = trip.get("plan_data", {})
+        local_travel_info = plan_data.get("local_travel_info", {})
+        local_gems = plan_data.get("local_gems", [])
+
+        # ── Main 3-tab layout ──────────────────────────────────────
+        tab_flights, tab_accommodation, tab_itinerary = st.tabs(
+            ["✈️ Flights", "🏨 Accommodation", "📅 Itineraries"]
+        )
+
+        # ═══════════════════════════════════════════════════════════
+        # TAB 1: FLIGHTS
+        # ═══════════════════════════════════════════════════════════
+        with tab_flights:
+            flights_response = requests.get(
+                f"{API_URL}/trips/{trip_id}/flights",
+                params={"user_id": st.session_state.user["id"]}
+            )
+            if flights_response.status_code == 200:
+                flights = flights_response.json()
+                if not flights:
+                    st.info("No flights found. Start planning to generate flight options.")
+                else:
+                    outbound = [f for f in flights if f["flight_type"] == "outbound"]
+                    return_flights = [f for f in flights if f["flight_type"] == "return"]
+
+                    for group_label, group_flights in [("🛫 Outbound Flights", outbound), ("🛬 Return Flights", return_flights)]:
+                        if not group_flights:
+                            continue
+                        st.subheader(group_label)
+
+                        # Find currently selected
+                        selected_id = None
+                        for f in group_flights:
+                            if f["status"] in ("selected", "booked"):
+                                selected_id = f["id"]
+                                break
+
+                        for flight in group_flights:
+                            is_selected = flight["id"] == selected_id
+                            is_booked = flight["status"] == "booked"
+
+                            border_color = "#27ae60" if is_selected else "#3498db" if is_booked else "#ddd"
+                            bg_color = "#f0fdf4" if is_selected else "#f0f7ff" if is_booked else "#fff"
+
+                            with st.container():
+                                col_sel, col_info, col_route, col_price = st.columns([1, 3, 4, 2])
+
+                                with col_sel:
+                                    if is_booked:
+                                        st.success("✓ Booked")
+                                    elif is_selected:
+                                        st.info("✓ Selected")
+                                    else:
+                                        if st.button("Select", key=f"sel_fl_{flight['id']}", use_container_width=True):
+                                            try:
+                                                requests.put(
+                                                    f"{API_URL}/trips/{trip_id}/flights/{flight['id']}/select",
+                                                    params={"user_id": st.session_state.user["id"]}
+                                                )
+                                                st.rerun()
+                                            except Exception:
+                                                st.error("Failed to select flight")
+
+                                with col_info:
+                                    st.write(f"**{flight['airline']}**")
+                                    st.caption(flight["flight_number"])
+
+                                with col_route:
+                                    dep = flight["departure_datetime"][:16].replace("T", " ")
+                                    arr = flight["arrival_datetime"][:16].replace("T", " ")
+                                    st.write(f"**{flight['from_airport']}** → **{flight['to_airport']}**")
+                                    st.caption(f"🛫 {dep}  ·  🛬 {arr}  ·  ⏱️ {flight['duration_minutes'] // 60}h {flight['duration_minutes'] % 60}m")
+
+                                with col_price:
+                                    st.write(f"**${flight['price']:.0f}**")
+                                    if not is_booked and is_selected:
+                                        if st.button("Book", key=f"book_fl_{flight['id']}", use_container_width=True):
+                                            try:
+                                                resp = requests.post(
+                                                    f"{API_URL}/trips/{trip_id}/flights/{flight['id']}/book",
+                                                    params={"user_id": st.session_state.user["id"]}
+                                                )
+                                                if resp.status_code == 200:
+                                                    data = resp.json()
+                                                    st.success("Booked!")
+                                                    st.markdown(f"[Book on airline site]({data['booking_url']})")
+                                                    st.rerun()
+                                            except Exception:
+                                                pass
+
+                                st.divider()
+            else:
+                st.error("Failed to load flights")
+
+        # ═══════════════════════════════════════════════════════════
+        # TAB 2: ACCOMMODATION
+        # ═══════════════════════════════════════════════════════════
+        with tab_accommodation:
+            accs_response = requests.get(
+                f"{API_URL}/trips/{trip_id}/accommodations",
+                params={"user_id": st.session_state.user["id"]}
+            )
+            if accs_response.status_code == 200:
+                accs = accs_response.json()
+                if not accs:
+                    st.info("No accommodations found. Start planning to generate options.")
+                else:
+                    # Group by city
+                    cities_seen: list[str] = []
+                    accs_by_city: dict[str, list] = {}
+                    for a in accs:
+                        city = a.get("city", "Unknown")
+                        if city not in accs_by_city:
+                            cities_seen.append(city)
+                            accs_by_city[city] = []
+                        accs_by_city[city].append(a)
+
+                    for city in cities_seen:
+                        city_accs = accs_by_city[city]
+                        st.subheader(f"🏙️ {city}")
+
+                        # Find currently selected
+                        selected_id = None
+                        for a in city_accs:
+                            if a["status"] in ("selected", "booked"):
+                                selected_id = a["id"]
+                                break
+
+                        for acc in city_accs:
+                            is_selected = acc["id"] == selected_id
+                            is_booked = acc["status"] == "booked"
+
+                            with st.container():
+                                col_sel, col_name, col_details, col_price = st.columns([1, 3, 4, 2])
+
+                                with col_sel:
+                                    if is_booked:
+                                        st.success("✓ Booked")
+                                    elif is_selected:
+                                        st.info("✓ Selected")
+                                    else:
+                                        if st.button("Select", key=f"sel_acc_{acc['id']}", use_container_width=True):
+                                            try:
+                                                requests.put(
+                                                    f"{API_URL}/trips/{trip_id}/accommodations/{acc['id']}/select",
+                                                    params={"user_id": st.session_state.user["id"]}
+                                                )
+                                                st.rerun()
+                                            except Exception:
+                                                st.error("Failed to select accommodation")
+
+                                with col_name:
+                                    st.write(f"**{acc['name']}**")
+                                    if acc.get("rating"):
+                                        st.caption(f"⭐ {acc['rating']}/5 · {acc['type']}")
+                                    else:
+                                        st.caption(acc["type"])
+
+                                with col_details:
+                                    st.write(f"📍 {acc['address']}")
+                                    st.caption(f"📅 {acc['check_in_date']} → {acc['check_out_date']}")
+                                    if acc.get("amenities"):
+                                        st.caption(f"✓ {', '.join(acc['amenities'][:4])}")
+
+                                with col_price:
+                                    st.write(f"**${acc['price_per_night']:.0f}**/night")
+                                    st.caption(f"Total: ${acc['total_price']:.0f}")
+                                    if not is_booked and is_selected:
+                                        if st.button("Book", key=f"book_acc_{acc['id']}", use_container_width=True):
+                                            try:
+                                                resp = requests.post(
+                                                    f"{API_URL}/trips/{trip_id}/accommodations/{acc['id']}/book",
+                                                    params={"user_id": st.session_state.user["id"]}
+                                                )
+                                                if resp.status_code == 200:
+                                                    data = resp.json()
+                                                    st.success("Booked!")
+                                                    st.markdown(f"[Book on site]({data['booking_url']})")
+                                                    st.rerun()
+                                            except Exception:
+                                                pass
+
+                                st.divider()
+            else:
+                st.error("Failed to load accommodations")
+
+        # ═══════════════════════════════════════════════════════════
+        # TAB 3: ITINERARIES (with sub-tabs for travel info & gems)
+        # ═══════════════════════════════════════════════════════════
+        with tab_itinerary:
+            # ── Regenerate button ─────────────────────────────────
+            regen_col1, regen_col2 = st.columns([6, 2])
+            with regen_col2:
+                if st.button("🔄 Regenerate Itinerary", use_container_width=True,
+                             help="Re-plan the itinerary based on your selected flights & accommodation. "
+                                  "Uses cached destination info — much faster than a full re-plan."):
+                    with st.spinner("Regenerating itinerary with selected options…"):
+                        try:
+                            regen_resp = requests.post(
+                                f"{API_URL}/trips/{trip_id}/regenerate-itinerary",
+                                params={"user_id": st.session_state.user["id"]},
+                                timeout=300,
+                            )
+                            if regen_resp.status_code == 200:
+                                st.success("✅ Itinerary regenerated!")
+                                st.rerun()
+                            else:
+                                detail = regen_resp.json().get("detail", "Unknown error")
+                                st.error(f"Regeneration failed: {detail}")
+                        except requests.exceptions.Timeout:
+                            st.error("⏰ Regeneration timed out.")
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+
+            # Sub-tabs inside Itineraries
+            if local_travel_info or local_gems:
+                sub_itinerary, sub_travel_info, sub_hidden_gems = st.tabs(
+                    ["📅 Day-by-Day Itinerary", "🗺️ Local Travel Info", "💎 Hidden Gems"]
+                )
+            else:
+                sub_itinerary = st.container()
+                sub_travel_info = None
+                sub_hidden_gems = None
+
+            # --- SUB-TAB: Local Travel Info ---
+            if sub_travel_info is not None and local_travel_info:
+                with sub_travel_info:
+                    st.subheader("🗺️ Essential Local Travel Information")
+                    st.caption("Practical tips to help you navigate like a local")
+
+                    apps = local_travel_info.get("transport_apps", [])
+                    if apps:
+                        st.markdown("#### 📱 Apps to Install Before You Go")
+                        for app_info in apps:
+                            app_type = app_info.get("type", "recommended")
+                            if app_type == "essential":
+                                badge = "🟢 Essential"
+                            elif app_type == "recommended":
+                                badge = "🔵 Recommended"
+                            else:
+                                badge = "⚪ Helpful"
+                            st.markdown(
+                                f"**{app_info['name']}** &nbsp; `{badge}`\n\n"
+                                f"{app_info.get('description', '')}"
+                            )
+                            st.write("")
+
+                    payment = local_travel_info.get("payment_info", {})
+                    if payment:
+                        st.markdown("#### 💳 Money & Payment")
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            st.metric("Currency", payment.get("currency", "N/A"))
+                        with col_b:
+                            cash_pref = payment.get("cash_preferred", False)
+                            st.metric("Cash Preferred?", "Yes" if cash_pref else "No")
+                        st.info(payment.get("cards_accepted", ""))
+                        if payment.get("tips"):
+                            st.success(f"💡 **Tip:** {payment['tips']}")
+
+                    tipping = local_travel_info.get("tipping_customs", "")
+                    if tipping:
+                        st.markdown("#### 🪙 Tipping Customs")
+                        st.write(tipping)
+
+                    lang = local_travel_info.get("language_tips", "")
+                    if lang:
+                        st.markdown("#### 🗣️ Language Tips")
+                        st.write(lang)
+
+                    sim = local_travel_info.get("sim_and_connectivity", "")
+                    if sim:
+                        st.markdown("#### 📶 SIM Cards & WiFi")
+                        st.write(sim)
+
+                    etiquette = local_travel_info.get("local_etiquette", [])
+                    if etiquette:
+                        st.markdown("#### 🎌 Local Etiquette & Cultural Tips")
+                        for rule in etiquette:
+                            st.markdown(f"- {rule}")
+
+            # --- SUB-TAB: Hidden Gems ---
+            if sub_hidden_gems is not None and local_gems:
+                with sub_hidden_gems:
+                    st.subheader("💎 Hidden Gems & Local Favorites")
+                    st.caption("Authentic places beyond the tourist traps, recommended by locals")
+
+                    categories = {
+                        "hidden_gem": ("🔮 Hidden Gems", []),
+                        "local_favorite": ("❤️ Local Favorites", []),
+                        "authentic_experience": ("🎭 Authentic Experiences", []),
+                    }
+                    for gem in local_gems:
+                        cat = gem.get("category", "hidden_gem")
+                        if cat in categories:
+                            categories[cat][1].append(gem)
+                        else:
+                            categories["hidden_gem"][1].append(gem)
+
+                    for cat_key, (cat_label, cat_gems) in categories.items():
+                        if not cat_gems:
+                            continue
+                        st.markdown(f"#### {cat_label}")
+                        for gem in cat_gems:
+                            with st.container():
+                                col1, col2 = st.columns([5, 2])
+                                with col1:
+                                    st.markdown(f"**{gem['name']}**")
+                                    st.write(gem.get("description", ""))
+                                    if gem.get("why_special"):
+                                        st.info(f"✨ **Why it's special:** {gem['why_special']}")
+                                    tags = gem.get("best_for", [])
+                                    if tags:
+                                        st.caption(" · ".join(f"#{t}" for t in tags))
+                                with col2:
+                                    nbh = gem.get("neighborhood", "")
+                                    city_n = gem.get("city", "")
+                                    if nbh:
+                                        st.write(f"📍 {nbh}")
+                                    if city_n:
+                                        st.write(f"🏙️ {city_n}")
+                                    maps_url = gem.get("google_maps_url", "")
+                                    if maps_url:
+                                        st.markdown(f"[🗺️ View on Map]({maps_url})")
+                                    source = gem.get("source", "")
+                                    if source:
+                                        st.caption(f"Source: {source}")
+                                st.divider()
+
+            # --- SUB-TAB: Day-by-Day Itinerary ---
+            with sub_itinerary:
+                response = requests.get(
+                    f"{API_URL}/trips/{trip_id}/itinerary",
+                    params={"user_id": st.session_state.user["id"]}
                 )
 
-            # Day selector
-            day_options = [f"Day {d['day_number']}" for d in days]
-            selected_day = st.selectbox("Select Day", day_options)
-            selected_day_num = int(selected_day.split()[1])
-            
-            # Find selected day data
-            day_data = next((d for d in days if d["day_number"] == selected_day_num), None)
-            
-            if day_data:
-                items = day_data["items"]
-                
-                st.subheader(f"Day {selected_day_num} - {len(items)} activities")
+                if response.status_code == 200:
+                    data = response.json()
+                    days = data.get("days", [])
 
-                # ── Google Maps widget ────────────────────────────────
-                destination = data.get("destination", "")
-                map_points = []
-                unmapped = []
-                with st.spinner("Mapping locations…"):
-                    for act_idx, itm in enumerate(items, 1):
-                        loc = itm.get("location")
-                        if loc:
-                            coords = geocode_location(loc, destination)
-                            if coords:
-                                map_points.append({
-                                    "title": itm["title"],
-                                    "location": loc,
-                                    "time": itm["start_time"],
-                                    "lat": coords[0],
-                                    "lon": coords[1],
-                                    "num": act_idx,   # preserve original activity number
-                                })
-                            else:
-                                unmapped.append(f"{act_idx}. {itm['title']} ({loc})")
-
-                if map_points:
-                    avg_lat = sum(p["lat"] for p in map_points) / len(map_points)
-                    avg_lon = sum(p["lon"] for p in map_points) / len(map_points)
-
-                    m = folium.Map(location=[avg_lat, avg_lon], zoom_start=13, tiles=None)
-                    folium.TileLayer(
-                        tiles="https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}",
-                        attr="Google",
-                        name="Google Maps",
-                    ).add_to(m)
-
-                    for pt in map_points:
-                        num = pt["num"]
-                        folium.Marker(
-                            location=[pt["lat"], pt["lon"]],
-                            popup=folium.Popup(
-                                f"<b>{num}. {pt['title']}</b><br>"
-                                f"🕐 {pt['time']}<br>"
-                                f"📍 {pt['location']}",
-                                max_width=250,
-                            ),
-                            tooltip=f"{num}. {pt['title']}",
-                            icon=folium.DivIcon(
-                                html=(
-                                    f'<div style="font-size:14px;color:#fff;'
-                                    f'background:#e74c3c;border-radius:50%;'
-                                    f'width:28px;height:28px;text-align:center;'
-                                    f'line-height:28px;font-weight:bold;'
-                                    f'border:2px solid #fff;'
-                                    f'box-shadow:0 2px 6px rgba(0,0,0,.3);"'
-                                    f'>{num}</div>'
-                                ),
-                                icon_size=(28, 28),
-                                icon_anchor=(14, 14),
-                            ),
-                        ).add_to(m)
-
-                    # Dashed route line connecting activities in order
-                    if len(map_points) > 1:
-                        folium.PolyLine(
-                            locations=[(p["lat"], p["lon"]) for p in map_points],
-                            color="#3498db",
-                            weight=3,
-                            opacity=0.7,
-                            dash_array="10",
-                        ).add_to(m)
-
-                    st_folium(m, height=420, use_container_width=True,
-                              key=f"map_day_{selected_day_num}",
-                              returned_objects=[])
-
-                    if unmapped:
-                        st.warning(
-                            "⚠️ Could not map: " + ", ".join(unmapped)
+                    if not days:
+                        st.info("No itinerary items yet. Start planning first!")
+                    else:
+                        # ── iCal download ────────────────────────────────
+                        ical_bytes = generate_ical(trip, days)
+                        safe_name = trip.get("title", "trip").replace(" ", "_")
+                        st.download_button(
+                            label="📅 Download iCal (.ics)",
+                            data=ical_bytes,
+                            file_name=f"{safe_name}.ics",
+                            mime="text/calendar",
                         )
-                else:
-                    st.info("📍 No locations could be mapped for this day.")
 
-                st.divider()
+                        # Day selector
+                        day_options = [f"Day {d['day_number']}" for d in days]
+                        selected_day = st.selectbox("Select Day", day_options)
+                        selected_day_num = int(selected_day.split()[1])
 
-                # Display items
-                for item in items:
-                    with st.container():
-                        col1, col2, col3 = st.columns([2, 6, 2])
-                        
-                        with col1:
-                            st.write(f"**{item['start_time']}**")
-                        
-                        with col2:
-                            title = item["title"]
-                            if item.get("is_ai_suggested"):
-                                title += " ⭐"
-                            st.write(f"**{title}**")
-                            st.write(f"_{item['description']}_")
-                            
-                            if item.get("location"):
-                                maps_url = item.get("google_maps_url", "")
-                                if maps_url:
-                                    st.markdown(f"📍 [{item['location']}]({maps_url})")
-                                else:
-                                    st.write(f"📍 {item['location']}")
-                            
-                            # Show local currency + USD
-                            cost_local = item.get("cost_local", "")
-                            cost_usd = item.get("cost_usd", item.get("cost", 0))
-                            currency = item.get("currency", "USD")
-                            if cost_usd and float(cost_usd) > 0:
-                                if currency != "USD" and cost_local:
-                                    st.write(f"💵 {cost_local} (~${cost_usd} USD)")
-                                else:
-                                    st.write(f"💵 ${cost_usd}")
-                        
-                        with col3:
-                            # Status
-                            status = item["status"]
-                            if status == "completed":
-                                st.success("✓ Done")
-                            elif status == "delayed":
-                                st.warning("Delayed")
-                            else:
-                                st.info("Planned")
-                            
-                            # Actions
-                            if item["status"] == "planned":
-                                if st.button("✓ Done", key=f"done_{item['id']}"):
-                                    try:
-                                        requests.put(
-                                            f"{API_URL}/trips/{trip_id}/itinerary/items/{item['id']}/complete",
-                                            params={"user_id": st.session_state.user["id"]}
-                                        )
-                                        st.rerun()
-                                    except:
-                                        pass
-                                
-                                # Delay option
-                                new_day = st.number_input(
-                                    "Delay to day",
-                                    min_value=1,
-                                    max_value=len(days),
-                                    value=selected_day_num,
-                                    key=f"delay_{item['id']}"
-                                )
-                                if st.button("Delay", key=f"delay_btn_{item['id']}"):
-                                    try:
-                                        requests.put(
-                                            f"{API_URL}/trips/{trip_id}/itinerary/items/{item['id']}/delay",
-                                            params={"user_id": st.session_state.user["id"], "new_day": new_day}
-                                        )
-                                        st.rerun()
-                                    except:
-                                        pass
-                        
-                        st.divider()
-        else:
-            st.error("Failed to load itinerary")
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
+                        day_data = next((d for d in days if d["day_number"] == selected_day_num), None)
 
-def show_flights():
-    if not st.session_state.user:
-        st.session_state.current_page = "login"
-        st.rerun()
-        return
-    
-    trip_id = st.session_state.get("current_trip_id")
-    if not trip_id:
-        st.error("No trip selected")
-        return
-    
-    st.title("✈️ Flights")
-    
-    try:
-        response = requests.get(
-            f"{API_URL}/trips/{trip_id}/flights",
-            params={"user_id": st.session_state.user["id"]}
-        )
-        
-        if response.status_code == 200:
-            flights = response.json()
-            
-            if not flights:
-                st.info("No flights found. Start planning to generate flight options.")
-                return
-            
-            # Group by type
-            outbound = [f for f in flights if f["flight_type"] == "outbound"]
-            return_flights = [f for f in flights if f["flight_type"] == "return"]
-            
-            if outbound:
-                st.header("Outbound Flights")
-                for flight in outbound:
-                    with st.container():
-                        col1, col2, col3 = st.columns([3, 5, 2])
-                        
-                        with col1:
-                            st.write(f"**{flight['airline']}**")
-                            st.write(f"{flight['flight_number']}")
-                        
-                        with col2:
-                            dep = flight["departure_datetime"][:16].replace("T", " ")
-                            arr = flight["arrival_datetime"][:16].replace("T", " ")
-                            st.write(f"{flight['from_airport']} → {flight['to_airport']}")
-                            st.write(f"🛫 {dep}")
-                            st.write(f"🛬 {arr}")
-                            st.write(f"⏱️ {flight['duration_minutes'] // 60}h {flight['duration_minutes'] % 60}m")
-                        
-                        with col3:
-                            st.write(f"**${flight['price']}**")
-                            
-                            if flight["status"] == "booked":
-                                st.success("✓ Booked")
-                            else:
-                                if st.button("Book", key=f"book_{flight['id']}"):
-                                    try:
-                                        book_response = requests.post(
-                                            f"{API_URL}/trips/{trip_id}/flights/{flight['id']}/book",
-                                            params={"user_id": st.session_state.user["id"]}
-                                        )
-                                        if book_response.status_code == 200:
-                                            book_data = book_response.json()
-                                            st.success("Marked as booked!")
-                                            st.markdown(f"[Book on airline site]({book_data['booking_url']})")
-                                            st.rerun()
-                                    except:
-                                        pass
-                        
-                        st.divider()
-            
-            if return_flights:
-                st.header("Return Flights")
-                for flight in return_flights:
-                    with st.container():
-                        col1, col2, col3 = st.columns([3, 5, 2])
-                        
-                        with col1:
-                            st.write(f"**{flight['airline']}**")
-                            st.write(f"{flight['flight_number']}")
-                        
-                        with col2:
-                            dep = flight["departure_datetime"][:16].replace("T", " ")
-                            arr = flight["arrival_datetime"][:16].replace("T", " ")
-                            st.write(f"{flight['from_airport']} → {flight['to_airport']}")
-                            st.write(f"🛫 {dep}")
-                            st.write(f"🛬 {arr}")
-                            st.write(f"⏱️ {flight['duration_minutes'] // 60}h {flight['duration_minutes'] % 60}m")
-                        
-                        with col3:
-                            st.write(f"**${flight['price']}**")
-                            
-                            if flight["status"] == "booked":
-                                st.success("✓ Booked")
-                            else:
-                                if st.button("Book", key=f"book_ret_{flight['id']}"):
-                                    try:
-                                        book_response = requests.post(
-                                            f"{API_URL}/trips/{trip_id}/flights/{flight['id']}/book",
-                                            params={"user_id": st.session_state.user["id"]}
-                                        )
-                                        if book_response.status_code == 200:
-                                            book_data = book_response.json()
-                                            st.success("Marked as booked!")
-                                            st.markdown(f"[Book on airline site]({book_data['booking_url']})")
-                                            st.rerun()
-                                    except:
-                                        pass
-                        
-                        st.divider()
-        else:
-            st.error("Failed to load flights")
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
+                        if day_data:
+                            items = day_data["items"]
+                            st.subheader(f"Day {selected_day_num} - {len(items)} activities")
 
-def show_accommodations():
-    if not st.session_state.user:
-        st.session_state.current_page = "login"
-        st.rerun()
-        return
-    
-    trip_id = st.session_state.get("current_trip_id")
-    if not trip_id:
-        st.error("No trip selected")
-        return
-    
-    st.title("🏨 Accommodations")
-    
-    try:
-        response = requests.get(
-            f"{API_URL}/trips/{trip_id}/accommodations",
-            params={"user_id": st.session_state.user["id"]}
-        )
-        
-        if response.status_code == 200:
-            accs = response.json()
-            
-            if not accs:
-                st.info("No accommodations found. Start planning to generate options.")
-                return
-            
-            for acc in accs:
-                with st.container():
-                    col1, col2, col3 = st.columns([3, 5, 2])
-                    
-                    with col1:
-                        st.write(f"**{acc['name']}**")
-                        st.write(f"⭐ {acc['rating']}/5" if acc['rating'] else "")
-                        st.write(f"Type: {acc['type']}")
-                    
-                    with col2:
-                        st.write(f"📍 {acc['city']}")
-                        st.write(f"📍 {acc['address']}")
-                        st.write(f"📅 {acc['check_in_date']} to {acc['check_out_date']}")
-                        
-                        if acc['amenities']:
-                            st.write(f"✓ {', '.join(acc['amenities'][:3])}")
-                    
-                    with col3:
-                        st.write(f"**${acc['price_per_night']}/night**")
-                        st.write(f"Total: ${acc['total_price']}")
-                        
-                        if acc["status"] == "booked":
-                            st.success("✓ Booked")
-                        else:
-                            if st.button("Book", key=f"book_acc_{acc['id']}"):
-                                try:
-                                    book_response = requests.post(
-                                        f"{API_URL}/trips/{trip_id}/accommodations/{acc['id']}/book",
-                                        params={"user_id": st.session_state.user["id"]}
+                            # ── Map widget ────────────────────────────────
+                            destination = data.get("destination", "")
+                            map_points = []
+                            unmapped = []
+                            with st.spinner("Mapping locations…"):
+                                for act_idx, itm in enumerate(items, 1):
+                                    loc = itm.get("location")
+                                    if loc:
+                                        coords = geocode_location(loc, destination)
+                                        if coords:
+                                            map_points.append({
+                                                "title": itm["title"],
+                                                "location": loc,
+                                                "time": itm["start_time"],
+                                                "lat": coords[0],
+                                                "lon": coords[1],
+                                                "num": act_idx,
+                                            })
+                                        else:
+                                            unmapped.append(f"{act_idx}. {itm['title']} ({loc})")
+
+                            if map_points:
+                                avg_lat = sum(p["lat"] for p in map_points) / len(map_points)
+                                avg_lon = sum(p["lon"] for p in map_points) / len(map_points)
+
+                                m = folium.Map(location=[avg_lat, avg_lon], zoom_start=13, tiles=None)
+                                folium.TileLayer(
+                                    tiles="https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}",
+                                    attr="Google",
+                                    name="Google Maps",
+                                ).add_to(m)
+
+                                for pt in map_points:
+                                    num = pt["num"]
+                                    folium.Marker(
+                                        location=[pt["lat"], pt["lon"]],
+                                        popup=folium.Popup(
+                                            f"<b>{num}. {pt['title']}</b><br>"
+                                            f"🕐 {pt['time']}<br>"
+                                            f"📍 {pt['location']}",
+                                            max_width=250,
+                                        ),
+                                        tooltip=f"{num}. {pt['title']}",
+                                        icon=folium.DivIcon(
+                                            html=(
+                                                f'<div style="font-size:14px;color:#fff;'
+                                                f'background:#e74c3c;border-radius:50%;'
+                                                f'width:28px;height:28px;text-align:center;'
+                                                f'line-height:28px;font-weight:bold;'
+                                                f'border:2px solid #fff;'
+                                                f'box-shadow:0 2px 6px rgba(0,0,0,.3);"'
+                                                f'>{num}</div>'
+                                            ),
+                                            icon_size=(28, 28),
+                                            icon_anchor=(14, 14),
+                                        ),
+                                    ).add_to(m)
+
+                                if len(map_points) > 1:
+                                    folium.PolyLine(
+                                        locations=[(p["lat"], p["lon"]) for p in map_points],
+                                        color="#3498db",
+                                        weight=3,
+                                        opacity=0.7,
+                                        dash_array="10",
+                                    ).add_to(m)
+
+                                st_folium(m, height=420, use_container_width=True,
+                                          key=f"map_day_{selected_day_num}",
+                                          returned_objects=[])
+
+                                if unmapped:
+                                    st.warning(
+                                        "⚠️ Could not map: " + ", ".join(unmapped)
                                     )
-                                    if book_response.status_code == 200:
-                                        book_data = book_response.json()
-                                        st.success("Marked as booked!")
-                                        st.markdown(f"[Book on site]({book_data['booking_url']})")
-                                        st.rerun()
-                                except:
-                                    pass
-                    
-                    st.divider()
-        else:
-            st.error("Failed to load accommodations")
+                            else:
+                                st.info("📍 No locations could be mapped for this day.")
+
+                            st.divider()
+
+                            # Display items
+                            for item in items:
+                                with st.container():
+                                    col1, col2, col3 = st.columns([2, 6, 2])
+
+                                    with col1:
+                                        st.write(f"**{item['start_time']}**")
+
+                                    with col2:
+                                        title = item["title"]
+                                        if item.get("is_ai_suggested"):
+                                            title += " ⭐"
+                                        st.write(f"**{title}**")
+                                        st.write(f"_{item['description']}_")
+
+                                        if item.get("location"):
+                                            maps_url = item.get("google_maps_url", "")
+                                            if maps_url:
+                                                st.markdown(f"📍 [{item['location']}]({maps_url})")
+                                            else:
+                                                st.write(f"📍 {item['location']}")
+
+                                        cost_local = item.get("cost_local", "")
+                                        cost_usd = item.get("cost_usd", item.get("cost", 0))
+                                        currency = item.get("currency", "USD")
+                                        if cost_usd and float(cost_usd) > 0:
+                                            if currency != "USD" and cost_local:
+                                                st.write(f"💵 {cost_local} (~${cost_usd} USD)")
+                                            else:
+                                                st.write(f"💵 ${cost_usd}")
+
+                                    with col3:
+                                        status = item["status"]
+                                        if status == "completed":
+                                            st.success("✓ Done")
+                                        elif status == "delayed":
+                                            st.warning("Delayed")
+                                        else:
+                                            st.info("Planned")
+
+                                        if item["status"] == "planned":
+                                            if st.button("✓ Done", key=f"done_{item['id']}"):
+                                                try:
+                                                    requests.put(
+                                                        f"{API_URL}/trips/{trip_id}/itinerary/items/{item['id']}/complete",
+                                                        params={"user_id": st.session_state.user["id"]}
+                                                    )
+                                                    st.rerun()
+                                                except Exception:
+                                                    pass
+
+                                            new_day = st.number_input(
+                                                "Delay to day",
+                                                min_value=1,
+                                                max_value=len(days),
+                                                value=selected_day_num,
+                                                key=f"delay_{item['id']}"
+                                            )
+                                            if st.button("Delay", key=f"delay_btn_{item['id']}"):
+                                                try:
+                                                    requests.put(
+                                                        f"{API_URL}/trips/{trip_id}/itinerary/items/{item['id']}/delay",
+                                                        params={"user_id": st.session_state.user["id"], "new_day": new_day}
+                                                    )
+                                                    st.rerun()
+                                                except Exception:
+                                                    pass
+
+                                    st.divider()
+                else:
+                    st.error("Failed to load itinerary")
+
     except Exception as e:
         st.error(f"Error: {str(e)}")
+
 
 if __name__ == "__main__":
     main()

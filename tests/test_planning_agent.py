@@ -34,7 +34,7 @@ COUNTRY_TRIP = {**SAMPLE_TRIP, "destination": "Japan"}
 
 
 def _mock_tasks(city_json="[\"Paris\"]", itin_json="[]"):
-    """Build five mock Task objects with .output.raw set."""
+    """Build seven mock Task objects with .output.raw set."""
     def make_task(raw):
         t = MagicMock()
         t.output.raw = raw
@@ -43,8 +43,10 @@ def _mock_tasks(city_json="[\"Paris\"]", itin_json="[]"):
     return [
         make_task("{}"),   # research
         make_task(city_json),  # city
+        make_task("[]"),   # local_gems
         make_task("{}"),   # flight
         make_task("{}"),   # accommodation
+        make_task("{}"),   # local_travel
         make_task(itin_json),  # itinerary
     ]
 
@@ -176,6 +178,8 @@ class TestParseCrewResult:
         assert "accommodations" in result
         assert "itinerary" in result
         assert "planning_summary" in result
+        assert "local_gems" in result
+        assert "local_travel_info" in result
 
     def test_uses_fallback_itinerary_when_llm_output_empty(self):
         tasks = _mock_tasks(itin_json="[]")
@@ -225,11 +229,13 @@ class TestTripPlannerPlanTrip:
             "flights": [],
             "accommodations": [],
             "itinerary": [],
+            "local_gems": [],
+            "local_travel_info": {},
             "is_country_level": False,
             "planning_summary": "Planned 8 days across Paris",
         }
-        with patch("planning_agent._build_agents", return_value=(MagicMock(),) * 5), \
-             patch("planning_agent._build_tasks", return_value=[MagicMock()] * 5), \
+        with patch("planning_agent._build_agents", return_value=(MagicMock(),) * 7), \
+             patch("planning_agent._build_tasks", return_value=[MagicMock()] * 7), \
              patch("planning_agent.Crew") as MockCrew, \
              patch("planning_agent._parse_crew_result", return_value=mock_plan):
             MockCrew.return_value.kickoff.return_value = None
@@ -238,8 +244,8 @@ class TestTripPlannerPlanTrip:
         assert result == mock_plan
 
     def test_crew_kickoff_is_called(self):
-        with patch("planning_agent._build_agents", return_value=(MagicMock(),) * 5), \
-             patch("planning_agent._build_tasks", return_value=[MagicMock()] * 5), \
+        with patch("planning_agent._build_agents", return_value=(MagicMock(),) * 7), \
+             patch("planning_agent._build_tasks", return_value=[MagicMock()] * 7), \
              patch("planning_agent.Crew") as MockCrew, \
              patch("planning_agent._parse_crew_result", return_value={}):
             pa.TripPlanner.plan_trip(SAMPLE_TRIP)
@@ -266,10 +272,11 @@ class TestTripPlannerStream:
 
     def test_yields_complete_event(self):
         mock_plan = {"cities": ["Paris"], "flights": [], "accommodations": [],
-                     "itinerary": [], "is_country_level": False, "planning_summary": ""}
+                     "itinerary": [], "local_gems": [], "local_travel_info": {},
+                     "is_country_level": False, "planning_summary": ""}
 
-        with patch("planning_agent._build_agents", return_value=(MagicMock(),) * 5), \
-             patch("planning_agent._build_tasks", return_value=[MagicMock()] * 5), \
+        with patch("planning_agent._build_agents", return_value=(MagicMock(),) * 7), \
+             patch("planning_agent._build_tasks", return_value=[MagicMock()] * 7), \
              patch("planning_agent.Crew") as MockCrew, \
              patch("planning_agent._parse_crew_result", return_value=mock_plan):
             MockCrew.return_value.kickoff.return_value = None
@@ -280,10 +287,11 @@ class TestTripPlannerStream:
 
     def test_complete_event_contains_plan(self):
         mock_plan = {"cities": ["Paris"], "flights": [], "accommodations": [],
-                     "itinerary": [], "is_country_level": False, "planning_summary": "done"}
+                     "itinerary": [], "local_gems": [], "local_travel_info": {},
+                     "is_country_level": False, "planning_summary": "done"}
 
-        with patch("planning_agent._build_agents", return_value=(MagicMock(),) * 5), \
-             patch("planning_agent._build_tasks", return_value=[MagicMock()] * 5), \
+        with patch("planning_agent._build_agents", return_value=(MagicMock(),) * 7), \
+             patch("planning_agent._build_tasks", return_value=[MagicMock()] * 7), \
              patch("planning_agent.Crew") as MockCrew, \
              patch("planning_agent._parse_crew_result", return_value=mock_plan):
             MockCrew.return_value.kickoff.return_value = None
@@ -293,8 +301,8 @@ class TestTripPlannerStream:
         assert complete["plan"] == mock_plan
 
     def test_yields_error_event_on_crew_exception(self):
-        with patch("planning_agent._build_agents", return_value=(MagicMock(),) * 5), \
-             patch("planning_agent._build_tasks", return_value=[MagicMock()] * 5), \
+        with patch("planning_agent._build_agents", return_value=(MagicMock(),) * 7), \
+             patch("planning_agent._build_tasks", return_value=[MagicMock()] * 7), \
              patch("planning_agent.Crew") as MockCrew:
             MockCrew.return_value.kickoff.side_effect = RuntimeError("LLM exploded")
             events = self._collect()
