@@ -1,0 +1,39 @@
+.trip-nav {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 6px;
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 32px;
+}
+
+.trip-nav__tab {
+  flex: 1;
+  padding: 12px 20px;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-align: center;
+  border-radius: var(--radius-md);
+  transition: all var(--transition-fast);
+}
+
+.trip-nav__tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+
+.trip-nav__tab.active {
+  color: white;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-deep) 100%);
+  box-shadow: var(--shadow-sm);
+}
+
+@media (max-width: 480px) {
+  .trip-nav__tab {
+    padding: 10px 12px;
+    font-size: 0.8rem;
+  }
+}

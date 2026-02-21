@@ -418,6 +418,110 @@ def get_planning_status(trip_id: str, user_id: str):
         "has_plan": bool(trip.plan_data)
     }
 
+
+@app.post("/trips/{trip_id}/regenerate-itinerary")
+def regenerate_itinerary(trip_id: str, user_id: str):
+    """Re-generate the itinerary using cached destination data and user-selected flights/accommodations.
+
+    This avoids re-running the full 7-agent crew.  Only the ItineraryPlanner runs,
+    using the cached plan_data for research / cities / local gems and the user's
+    currently selected (or all if none selected) flights and accommodations.
+    """
+    db = get_db()
+    trip = db.query(Trip).filter(Trip.id == trip_id, Trip.user_id == user_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    if not trip.plan_data:
+        raise HTTPException(status_code=400, detail="Trip has no existing plan to regenerate from")
+
+    # Gather selected flights (fall back to all if none selected)
+    all_flights = db.query(Flight).filter(Flight.trip_id == trip_id).all()
+    selected_flights = [f for f in all_flights if f.status == "selected"]
+    if not selected_flights:
+        selected_flights = all_flights
+    flight_dicts = [
+        {
+            "flight_type": f.flight_type,
+            "airline": f.airline,
+            "from_airport": f.from_airport,
+            "to_airport": f.to_airport,
+            "departure_datetime": f.departure_datetime,
+            "arrival_datetime": f.arrival_datetime,
+            "price": f.price,
+        }
+        for f in selected_flights
+    ]
+
+    # Gather selected accommodations (fall back to all if none selected)
+    all_accs = db.query(Accommodation).filter(Accommodation.trip_id == trip_id).all()
+    selected_accs = [a for a in all_accs if a.status == "selected"]
+    if not selected_accs:
+        selected_accs = all_accs
+    accom_dicts = [
+        {
+            "name": a.name,
+            "city": a.city,
+            "address": a.address,
+            "price_per_night": a.price_per_night,
+        }
+        for a in selected_accs
+    ]
+
+    trip_data = {
+        "destination": trip.destination,
+        "start_date": trip.start_date,
+        "end_date": trip.end_date,
+        "num_travelers": trip.num_travelers,
+        "interests": trip.interests,
+        "dietary_restrictions": trip.dietary_restrictions,
+        "budget_level": trip.budget_level,
+    }
+
+    try:
+        result = planning_agent.regenerate_itinerary(
+            trip_data, trip.plan_data, flight_dicts, accom_dicts
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Itinerary regeneration failed: {str(e)}")
+
+    new_itinerary = result["itinerary"]
+
+    # Delete old itinerary items
+    db.query(ItineraryItem).filter(ItineraryItem.trip_id == trip_id).delete()
+
+    # Save new itinerary items
+    for day in new_itinerary:
+        for item in day.get("items", []):
+            db.add(ItineraryItem(
+                trip_id=trip.id,
+                day_number=day["day_number"],
+                title=item["title"],
+                description=item.get("description", ""),
+                start_time=item["start_time"],
+                duration_minutes=item["duration_minutes"],
+                item_type=item["item_type"],
+                location=item.get("location", ""),
+                cost=item.get("cost_usd", item.get("cost", 0)),
+                currency=item.get("currency", "USD"),
+                booking_url=item.get("google_maps_url", item.get("booking_url")),
+                status="planned",
+                delayed_to_day=None,
+                is_ai_suggested=item.get("is_ai_suggested", 1),
+            ))
+
+    # Update plan_data with new itinerary (preserve other cached data)
+    updated_plan = dict(trip.plan_data)
+    updated_plan["itinerary"] = new_itinerary
+    trip.plan_data = updated_plan
+    db.commit()
+
+    return {
+        "status": "completed",
+        "message": "Itinerary regenerated successfully!",
+        "days_planned": len(new_itinerary),
+    }
+
 # Itinerary endpoints
 @app.get("/trips/{trip_id}/itinerary")
 def get_itinerary(trip_id: str, user_id: str):
@@ -610,6 +714,32 @@ def book_flight(trip_id: str, flight_id: str, user_id: str):
     
     return {"message": "Flight marked as booked", "booking_url": flight.booking_url}
 
+
+@app.put("/trips/{trip_id}/flights/{flight_id}/select")
+def select_flight(trip_id: str, flight_id: str, user_id: str):
+    """Select a flight option. Resets other flights of the same type to 'suggested'."""
+    db = get_db()
+
+    trip = db.query(Trip).filter(Trip.id == trip_id, Trip.user_id == user_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    flight = db.query(Flight).filter(Flight.id == flight_id, Flight.trip_id == trip_id).first()
+    if not flight:
+        raise HTTPException(status_code=404, detail="Flight not found")
+
+    # Reset all flights of the same type (outbound/return) to suggested
+    db.query(Flight).filter(
+        Flight.trip_id == trip_id,
+        Flight.flight_type == flight.flight_type,
+    ).update({"status": "suggested"})
+
+    flight.status = "selected"
+    db.commit()
+
+    return {"message": f"Flight {flight_id} selected", "flight_type": flight.flight_type}
+
+
 # Accommodation endpoints
 @app.get("/trips/{trip_id}/accommodations")
 def get_accommodations(trip_id: str, user_id: str):
@@ -658,6 +788,32 @@ def book_accommodation(trip_id: str, acc_id: str, user_id: str):
     
     return {"message": "Accommodation marked as booked", "booking_url": acc.booking_url}
 
+
+@app.put("/trips/{trip_id}/accommodations/{acc_id}/select")
+def select_accommodation(trip_id: str, acc_id: str, user_id: str):
+    """Select an accommodation option. Resets other accommodations in the same city to 'suggested'."""
+    db = get_db()
+
+    trip = db.query(Trip).filter(Trip.id == trip_id, Trip.user_id == user_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    acc = db.query(Accommodation).filter(Accommodation.id == acc_id, Accommodation.trip_id == trip_id).first()
+    if not acc:
+        raise HTTPException(status_code=404, detail="Accommodation not found")
+
+    # Reset all accommodations in the same city to suggested
+    db.query(Accommodation).filter(
+        Accommodation.trip_id == trip_id,
+        Accommodation.city == acc.city,
+    ).update({"status": "suggested"})
+
+    acc.status = "selected"
+    db.commit()
+
+    return {"message": f"Accommodation {acc_id} selected", "city": acc.city}
+
+
 # Search endpoints
 @app.get("/search/cities")
 def search_cities(q: str):
@@ -687,8 +843,10 @@ def health_check():
         "agents": [
             "DestinationResearcher",
             "CitySelector",
+            "LocalExpert",
             "FlightFinder",
             "AccommodationFinder",
+            "LocalTravelAdvisor",
             "ItineraryPlanner",
         ],
     }

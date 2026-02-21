@@ -1,0 +1,4 @@
+/* App-level layout — minimal, delegates to pages */
+.app {
+  min-height: 100vh;
+}
