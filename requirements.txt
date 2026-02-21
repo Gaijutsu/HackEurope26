@@ -1,4 +1,3 @@
-# Web framework
 fastapi>=0.109.0
 uvicorn>=0.27.0
 sse-starlette>=1.8.2
@@ -12,6 +11,9 @@ pydantic>=2.5.3
 
 # CrewAI (Multi-agent orchestration)
 crewai[tools]>=0.95.0
+
+# Amadeus flight & hotel API
+amadeus>=9.0.0
 
 # Web search tool
 tavily-python>=0.5.0
@@ -29,3 +31,4 @@ httpx>=0.26.0
 
 # Environment
 python-dotenv>=1.0.0
+
