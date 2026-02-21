@@ -1,7 +1,9 @@
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import MoodBoardCard from '../components/MoodBoardCard'
+import CityAutocomplete from '../components/CityAutocomplete'
+import { isValidCity } from '../data/cities'
 import './Landing.css'
 
 const MOOD_BOARDS = [
@@ -67,13 +69,25 @@ const pageVariants = {
 
 export default function Landing() {
     const [destination, setDestination] = useState('')
+    const [cityValid, setCityValid] = useState(false)
     const [searched, setSearched] = useState(false)
     const [isSearching, setIsSearching] = useState(false)
     const navigate = useNavigate()
 
+    const handleDestinationChange = useCallback((val) => {
+        setDestination(val)
+        setCityValid(isValidCity(val))
+        // Reset mood boards if destination changes after a search
+        if (searched) setSearched(false)
+    }, [searched])
+
+    const handleCitySelect = useCallback(() => {
+        setCityValid(true)
+    }, [])
+
     const handleSearch = (e) => {
         e.preventDefault()
-        if (!destination.trim()) return
+        if (!destination.trim() || !isValidCity(destination)) return
         setIsSearching(true)
         // Simulate search delay for smooth animation
         setTimeout(() => {
@@ -140,19 +154,16 @@ export default function Landing() {
                         <circle cx="11" cy="11" r="8" />
                         <path d="m21 21-4.35-4.35" />
                     </svg>
-                    <input
-                        id="destination-input"
-                        type="text"
-                        className="landing__input"
-                        placeholder="Where do you want to go?"
+                    <CityAutocomplete
                         value={destination}
-                        onChange={(e) => setDestination(e.target.value)}
-                        autoComplete="off"
+                        onChange={handleDestinationChange}
+                        onValidSelect={handleCitySelect}
+                        disabled={isSearching}
                     />
                     <button
                         type="submit"
                         className="landing__search-btn"
-                        disabled={!destination.trim() || isSearching}
+                        disabled={!cityValid || isSearching}
                     >
                         {isSearching ? (
                             <span className="landing__spinner" />
@@ -210,9 +221,7 @@ export default function Landing() {
                 )}
             </AnimatePresence>
 
-            <footer className="landing__footer">
-                <p>© 2026 precise.ly — Travel, curated.</p>
-            </footer>
+
         </motion.div>
     )
 }
