@@ -108,16 +108,17 @@ export default function Landing() {
 
     const getVoteState = (mood) => votes[mood.id] || 'neither'
 
-    const handleSelectMood = (mood) => {
-        navigate(`/plan?destination=${encodeURIComponent(destination)}&mood=${mood.id}&vibe`)
+    const handleSubmit = () => {
+        const upvoted = getUpvotedCards().map((m) => m.id)
+        const downvoted = getDownvotedCards().map((m) => m.id)
+        const params = new URLSearchParams({ destination })
+        if (upvoted.length) params.set('upvoted', upvoted.join(','))
+        if (downvoted.length) params.set('downvoted', downvoted.join(','))
+        navigate(`/plan?${params.toString()}`)
     }
 
-    const handleSubmit = () => {
-        const upvoted = getUpvotedCards()
-        const downvoted = getDownvotedCards()
-        alert(
-            `Upvoted:\n${upvoted.map((m) => m.id).join(', ') || 'None'}\n\nDownvoted:\n${downvoted.map((m) => m.id).join(', ') || 'None'}`
-        )
+    const handleSkipToNext = () => {
+        navigate(`/plan?destination=${encodeURIComponent(destination)}`)
     }
 
     const hasVotes = Object.values(votes).some((v) => v !== 'neither')
@@ -238,42 +239,57 @@ export default function Landing() {
                                     voteState={getVoteState(mood)}
                                     onUpvote={() => handleUpvote(mood)}
                                     onDownvote={() => handleDownvote(mood)}
-                                    onClick={() => handleSelectMood(mood)}
                                 />
                             ))}
                         </motion.div>
-                        <AnimatePresence>
-                            {hasVotes && (
-                                <motion.div
-                                    className="landing__submit-wrap"
-                                    initial={{ opacity: 0, y: 20 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    exit={{ opacity: 0, y: 10 }}
-                                    transition={{ duration: 0.4, ease: [0.4, 0, 0.2, 1] }}
+                        <motion.div
+                            className="landing__submit-wrap"
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: 0.4, ease: [0.4, 0, 0.2, 1] }}
+                        >
+                            <button
+                                type="button"
+                                className="landing__submit-btn"
+                                onClick={handleSubmit}
+                                disabled={!hasVotes}
+                            >
+                                <span>Continue with your vibes</span>
+                                <svg
+                                    width="20"
+                                    height="20"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
                                 >
-                                    <button
-                                        type="button"
-                                        className="landing__submit-btn"
-                                        onClick={handleSubmit}
-                                    >
-                                        <span>Continue with your vibes</span>
-                                        <svg
-                                            width="20"
-                                            height="20"
-                                            viewBox="0 0 24 24"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            strokeWidth="2"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                        >
-                                            <path d="M5 12h14" />
-                                            <path d="m12 5 7 7-7 7" />
-                                        </svg>
-                                    </button>
-                                </motion.div>
-                            )}
-                        </AnimatePresence>
+                                    <path d="M5 12h14" />
+                                    <path d="m12 5 7 7-7 7" />
+                                </svg>
+                            </button>
+                            <button
+                                type="button"
+                                className="landing__skip-btn"
+                                onClick={handleSkipToNext}
+                            >
+                                <span>I already know my vibe</span>
+                                <svg
+                                    width="20"
+                                    height="20"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                >
+                                    <path d="M5 12h14" />
+                                    <path d="m12 5 7 7-7 7" />
+                                </svg>
+                            </button>
+                        </motion.div>
                     </motion.section>
                 )}
             </AnimatePresence>
