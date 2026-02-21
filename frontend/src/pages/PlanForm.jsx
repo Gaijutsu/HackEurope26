@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useAuth } from '../contexts/AuthContext'
+import LoginBanner from '../components/LoginBanner'
 import * as api from '../api'
 import './PlanForm.css'
 
@@ -72,6 +73,7 @@ export default function PlanForm() {
     const moodId = searchParams.get('mood') || '1'
     const mood = MOOD_DATA[moodId] || MOOD_DATA[1]
 
+    // Build initial vibe from URL params (populated by "Continue with your vibes")
     const upvotedParam = searchParams.get('upvoted') || ''
     const downvotedParam = searchParams.get('downvoted') || ''
     const upvotedIds = upvotedParam ? upvotedParam.split(',').filter(Boolean) : []
@@ -100,6 +102,8 @@ export default function PlanForm() {
         const { name, value } = e.target
         setForm((prev) => {
             const next = { ...prev, [name]: value }
+            // If departure date is changed to be after the current return date,
+            // or if return date is not set, sync return date to departure
             if (name === 'startDate') {
                 if (!prev.endDate || value > prev.endDate) {
                     next.endDate = value
@@ -107,6 +111,7 @@ export default function PlanForm() {
             }
             return next
         })
+        // Clear error when user types
         if (errors[name]) {
             setErrors((prev) => ({ ...prev, [name]: '' }))
         }
@@ -142,6 +147,7 @@ export default function PlanForm() {
 
         if (Object.keys(newErrors).length > 0) {
             setErrors(newErrors)
+            // Scroll to first error
             const firstError = Object.keys(newErrors)[0]
             document.getElementById(firstError)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
             return
@@ -200,6 +206,8 @@ export default function PlanForm() {
             <div className="plan__bg-orb plan__bg-orb--1" />
             <div className="plan__bg-orb plan__bg-orb--2" />
 
+            <LoginBanner />
+
             <motion.button
                 className="plan__back"
                 onClick={() => navigate('/')}
@@ -214,6 +222,7 @@ export default function PlanForm() {
                 <span>Back to vibes</span>
             </motion.button>
 
+            {/* Header with mood context */}
             <motion.header className="plan__header" variants={itemVariants}>
                 <div className="plan__mood-preview">
                     <img src={mood.image} alt={mood.title} className="plan__mood-image" />
@@ -229,6 +238,7 @@ export default function PlanForm() {
                 </div>
             </motion.header>
 
+            {/* Form */}
             {!submitted ? (
                 <motion.form className="plan__form" onSubmit={handleSubmit} variants={itemVariants}>
                     {errors.submit && (
@@ -409,13 +419,6 @@ export default function PlanForm() {
                             rows={4}
                         />
                     </div>
-
-                    {!isAuthenticated && (
-                        <div className="plan__auth-hint">
-                            💡 You'll need to <a href="/login" onClick={(e) => { e.preventDefault(); navigate('/login') }}>sign in</a> or{' '}
-                            <a href="/register" onClick={(e) => { e.preventDefault(); navigate('/register') }}>create an account</a> to generate your itinerary.
-                        </div>
-                    )}
 
                     <motion.button
                         type="submit"

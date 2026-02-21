@@ -1,5 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
 
+const API_URL = 'http://localhost:8000'
+
 const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
@@ -36,6 +38,36 @@ export function AuthProvider({ children }) {
     setUser(authData.user)
   }, [])
 
+  const login = useCallback(async (email, password) => {
+    const response = await fetch(`${API_URL}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    })
+    const data = await response.json()
+    if (!response.ok) {
+      throw new Error(data.detail || 'Invalid email or password')
+    }
+    setToken(data.access_token)
+    setUser(data.user)
+    return data.user
+  }, [])
+
+  const register = useCallback(async (name, email, password) => {
+    const response = await fetch(`${API_URL}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email, password }),
+    })
+    const data = await response.json()
+    if (!response.ok) {
+      throw new Error(data.detail || 'Registration failed')
+    }
+    setToken(data.access_token)
+    setUser(data.user)
+    return data.user
+  }, [])
+
   const logout = useCallback(() => {
     setToken(null)
     setUser(null)
@@ -46,7 +78,7 @@ export function AuthProvider({ children }) {
   const isAuthenticated = !!user && !!token
 
   return (
-    <AuthContext.Provider value={{ user, token, isAuthenticated, loginUser, logout }}>
+    <AuthContext.Provider value={{ user, token, isAuthenticated, loginUser, login, register, logout }}>
       {children}
     </AuthContext.Provider>
   )

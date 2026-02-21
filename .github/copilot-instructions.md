@@ -2,77 +2,97 @@
 
 ## Architecture Overview
 
-This is a **hackathon project**: a multi-agent trip planner using **CrewAI** for AI orchestration, **FastAPI** for the backend API, **Streamlit** for the frontend, and **SQLite/SQLAlchemy** for persistence. The system supports OpenAI, Gemini, and Anthropic LLMs via `LLM_PROVIDER` env var.
+Hackathon project: multi-agent trip planner. **CrewAI** (7 agents) → **FastAPI** backend (`:8000`) → **React/Vite** frontend (`:5173`) + legacy **Streamlit** frontend (`:8501`). **SQLite/SQLAlchemy** for persistence. Supports OpenAI, Gemini, Anthropic LLMs via `LLM_PROVIDER`.
 
-**Data flow:** Streamlit UI → FastAPI REST API (`:8000`) → `planning_agent.TripPlanner` → CrewAI Crew (5 agents in sequential process) → Amadeus APIs (with mock fallback) → results persisted to SQLite → returned to UI.
+**Data flow:** React UI → FastAPI REST API → `agents/planning_agent.TripPlanner` → CrewAI Crew (7 sequential agents) → Amadeus APIs (mock fallback) → SQLite → response to UI.
 
 ### Key Components
 
 | Layer | Entry Point | Role |
 |---|---|---|
-| API | `main.py` | FastAPI app, auth (JWT), CRUD, SSE streaming (`/trips/{id}/plan/stream`) |
-| Orchestrator | `agents/planning_agent.py` | Builds 5 CrewAI agents, tasks, parses results. **This is the most complex file (~1100 lines)** |
-| Sub-agents | `agents/FlightAgent.py`, `agents/AccomAgent.py` | Amadeus API wrappers exposed as `@crewai_tool`s; fall back to mock data when no credentials |
-| Data models | `database.py` | SQLAlchemy models: `User`, `Trip`, `ItineraryItem`, `Flight`, `Accommodation`, `City` |
-| Shared DTO | `PlanningInfo.py` | `@dataclass_json` used by sub-agents for structured trip params |
-| Mock layer | `mock_data.py` | Generates fake flights/hotels/city info when Amadeus keys are absent |
-| Frontend | `streamlit_app/app.py` | Multi-page Streamlit app with maps (folium), iCal export, SSE consumption |
+| API | `main.py` | FastAPI app, JWT auth, CRUD, SSE streaming, iCal export |
+| Orchestrator | `agents/planning_agent.py` | 7 CrewAI agents, task creation, LLM output parsing (~1100 lines) |
+| Sub-agents | `agents/FlightAgent.py`, `agents/AccomAgent.py` | Amadeus API wrappers as `@crewai_tool`s; mock fallback |
+| Data models | `database.py` | SQLAlchemy: `User`, `Trip`, `ItineraryItem`, `Flight`, `Accommodation`, `City` |
+| Shared DTO | `PlanningInfo.py` | `@dataclass_json` for structured trip params |
+| Mock layer | `mock_data.py` | Fake flights/hotels/city data when Amadeus keys absent |
+| React frontend | `frontend/` | Vite + React 19, react-router-dom, framer-motion, custom CSS |
+| Streamlit frontend | `streamlit_app/app.py` | Legacy: maps (folium), iCal, SSE consumption |
+| Pinterest server | `frontend/server.py` | Separate FastAPI app for Pinterest image scraping (mood boards) |
+
+### The 7 CrewAI Agents
+
+DestinationResearcher → CitySelector → LocalExpert → FlightFinder → AccommodationFinder → LocalTravelAdvisor → ItineraryPlanner. Context flows forward; ItineraryPlanner receives all prior outputs.
 
 ## Running & Testing
 
 ```bash
-# Full stack (both backend + frontend):
-bash start.sh
-
-# Backend only:
-python main.py                    # serves on :8000
-
-# Frontend only:
-cd streamlit_app && streamlit run app.py   # serves on :8501
-
-# Tests (from project root):
-pytest tests/
+bash start.sh                              # Backend (:8000) + Streamlit (:8501)
+python main.py                             # Backend only
+cd frontend && npx vite --port 5173        # React frontend only (proxy /api → :8000)
+cd streamlit_app && streamlit run app.py   # Streamlit only
+pytest tests/                              # Tests (from project root)
 ```
 
-Tests import agents **directly by filename** (not via the `agents` package). See `tests/conftest.py` — it adds both project root and `agents/` to `sys.path`. When writing tests, import like `import planning_agent as pa` and `import FlightAgent as fa`, not `from agents import ...`.
+**Note:** `start.sh` does NOT start the React frontend. Run it separately. The React frontend proxies `/api` to `:8000` via Vite config, but `frontend/src/api.js` hardcodes `BASE_URL = http://localhost:8000` (bypasses proxy).
+
+### Test conventions
+Tests import agents **by bare filename**, not via the `agents` package. `tests/conftest.py` adds both project root and `agents/` to `sys.path`:
+```python
+import planning_agent as pa       # ✓ correct
+import FlightAgent as fa          # ✓ correct
+from agents import planning_agent # ✗ wrong
+```
+Mock CrewAI task outputs by setting `task.output.raw` to JSON strings. Test pure helper functions (`_safe_json_parse`, `_normalize_amadeus_flights`, `_is_likely_country`) directly.
 
 ## Critical Patterns
 
 ### Amadeus → Mock Fallback
-Every external data path (flights, hotels) follows the same pattern: try Amadeus API → if error or no credentials → fall back to `mock_data.py` generators. The check is `_has_credentials = bool(os.getenv("AMADEUS_CLIENT_ID"))`. When adding new external data sources, follow this same fallback pattern.
+Every external data path: try Amadeus API → on error or missing credentials → `mock_data.py`. The credential check is `_has_credentials = bool(os.getenv("AMADEUS_CLIENT_ID"))`. New external data sources must follow this same pattern.
+
+### Auth — Hackathon Shortcut
+Backend generates JWT tokens at login, but **does not validate them on protected routes**. All endpoints trust a `user_id` query parameter directly. The React frontend stores the token in `localStorage["token"]` and sends it via `Authorization: Bearer` header, but the backend ignores it. User identification is purely via `?user_id=` param.
 
 ### IATA Code Resolution
-City names are converted to IATA codes via `_CITY_TO_AIRPORT` / `_CITY_TO_IATA_CITY` dicts in `planning_agent.py`, falling back to `mock_data.get_airport_for_city()`. CrewAI tools accept **city names** (e.g. "Paris") and handle IATA conversion internally — agents never need to know IATA codes.
-
-### Amadeus Response Normalization
-Raw Amadeus API responses (FlightOffer, HotelOffers) are converted to the DB-compatible schema via `_normalize_amadeus_flights()` and `_normalize_amadeus_hotels()` in `planning_agent.py`. Mock data is already in DB-compatible format. Detection uses `_is_mock_flight()` / `_is_mock_accom()`.
-
-### Country vs City Detection
-`_is_likely_country(destination)` checks against a hardcoded `COUNTRIES` set. Country-level trips trigger multi-city selection (2-4 cities); city-level trips skip the CitySelector agent. When a country isn't recognized, the trip is treated as a single city.
+City names → IATA codes via `_CITY_TO_AIRPORT` / `_CITY_TO_IATA_CITY` dicts in `planning_agent.py`, fallback to `mock_data.get_airport_for_city()`. CrewAI tools accept city names — agents never deal with IATA codes.
 
 ### LLM Output Parsing
-Agent outputs are raw LLM text. `_safe_json_parse()` strips markdown fences before `json.loads()`. Always expect LLM outputs to be wrapped in ```json fences. Fallback data (`_build_fallback_itinerary`, `_fallback_day_plan`) is used when parsing fails.
+Agent outputs are raw LLM text. `_safe_json_parse()` strips markdown ` ```json ` fences before `json.loads()`. Always expect fenced JSON from LLMs. Fallback builders (`_build_fallback_itinerary`, `_fallback_day_plan`) handle parse failures gracefully.
+
+### Country vs City Detection
+`_is_likely_country(destination)` checks a hardcoded `COUNTRIES` set. Country → multi-city (2-4 cities via CitySelector). Unrecognized → treated as single city.
 
 ### SSE Streaming
-`plan_trip_stream()` runs the CrewAI crew in a background thread and yields SSE events. Progress callbacks fire when each agent completes. The frontend consumes these via `requests` streaming in `streamlit_app/app.py`.
+`plan_trip_stream()` runs CrewAI crew in a background thread, yields SSE events (`progress`, `complete`, `error`). React frontend reads with `fetch()` + `ReadableStream` (not `EventSource`), parsing `data:` lines manually in `api.js:streamTripPlan()`.
+
+### Itinerary Regeneration
+`POST /trips/{trip_id}/regenerate-itinerary` re-runs only the ItineraryPlanner agent using cached `trip.plan_data` JSON + user-selected flights/accommodations. Avoids full 7-agent re-run.
+
+### Flight/Accommodation Selection
+`PUT /flights/{id}/select` sets status to `selected` and resets all sibling flights (same trip + type) to `suggested`. Same pattern for accommodations. Status lifecycle: `suggested` → `selected` → `booked`.
 
 ## Conventions
 
-- **IDs**: 8-char truncated UUIDs (`str(uuid.uuid4())[:8]`) — see `database.py:generate_id()`
-- **Dates**: Strings in `YYYY-MM-DD` format throughout (DB, API, agents)
-- **Prices**: Always include both `cost_usd` (numeric) and `cost_local` (formatted string with currency symbol) in itinerary items
-- **Google Maps URLs**: Every itinerary location must have a `google_maps_url` field built via `_gmaps_url(place, city)`
-- **Booking URLs**: Flights/hotels include `booking_url` — Google Flights/Hotels search links as fallback
-- **Status fields**: Itinerary items use `planned/completed/skipped/delayed`; flights and accommodations use `suggested/selected/booked`
-- **CrewAI tools**: Decorated with `@crewai_tool("Tool Name")` — the string name is what agents see. Tool functions use `.func` attribute for direct testing
+- **IDs**: 8-char truncated UUIDs — `str(uuid.uuid4())[:8]` via `database.py:generate_id()`
+- **Dates**: `YYYY-MM-DD` strings everywhere (DB, API, agents)
+- **Prices**: Include `cost_usd` (numeric) + `cost_local` (formatted with currency symbol)
+- **Google Maps URLs**: Every location → `google_maps_url` via `_gmaps_url(place, city)`
+- **Booking URLs**: Google Flights/Hotels search URLs as fallback
+- **Status fields**: Itinerary items: `planned/completed/skipped/delayed`; flights/accommodations: `suggested/selected/booked`
+- **CrewAI tools**: `@crewai_tool("Tool Name")` — test via `.func` attribute
+- **LLM config**: `_get_llm_model_string()` returns `"gpt-4o-mini"` (OpenAI) or `"gemini/gemini-2.0-flash"` / `"anthropic/claude-sonnet-4-20250514"` (prefixed for CrewAI)
+- **Dual imports in agents**: `try: from .Module import ... except ImportError: from Module import ...` — supports both package and direct invocation
+- **React frontend CSS**: Per-component CSS files, BEM-style class names (`plan__header`, `navbar__link`)
+- **No DB migrations**: Uses `create_all()` directly; `seed_cities()` inserts 15 popular cities on startup
+- **Trip plan_data**: Complete AI output stored as JSON column on Trip; enables regeneration without re-running full crew
 
 ## Environment Variables
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `OPENAI_API_KEY` / `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` | One required | LLM provider credentials |
+| `OPENAI_API_KEY` / `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` | One required | LLM credentials |
 | `LLM_PROVIDER` | No (default: `openai`) | `openai`, `gemini`, or `anthropic` |
-| `LLM_MODEL` | No | Override default model per provider |
-| `AMADEUS_CLIENT_ID` + `AMADEUS_CLIENT_SECRET` | No | Live flight/hotel data (falls back to mock) |
-| `TAVILY_API_KEY` / `SERPER_API_KEY` | No | Web search for DestinationResearcher agent |
-| `SECRET_KEY` | No | JWT signing key (defaults to `hackathon-secret-key`) |
+| `LLM_MODEL` | No | Override model (defaults: `gpt-4o-mini`, `gemini-2.0-flash`, `claude-sonnet-4-20250514`) |
+| `AMADEUS_CLIENT_ID` + `AMADEUS_CLIENT_SECRET` | No | Live flight/hotel data (mock fallback) |
+| `TAVILY_API_KEY` / `SERPER_API_KEY` | No | Web search for DestinationResearcher |
+| `SECRET_KEY` | No | JWT signing (default: `hackathon-secret-key`) |

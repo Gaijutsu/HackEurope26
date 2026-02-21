@@ -410,28 +410,6 @@
     to { transform: rotate(360deg); }
 }
 
-/* Auth hint */
-.plan__auth-hint {
-    font-size: 0.88rem;
-    color: var(--text-secondary);
-    background: rgba(232, 196, 200, 0.08);
-    border: 1px solid rgba(232, 196, 200, 0.2);
-    border-radius: var(--radius-md);
-    padding: 14px 20px;
-    line-height: 1.6;
-}
-
-.plan__auth-hint a {
-    color: var(--accent-deep);
-    font-weight: 600;
-    text-decoration: underline;
-    text-underline-offset: 2px;
-}
-
-.plan__auth-hint a:hover {
-    color: var(--text-primary);
-}
-
 /* Duration hint */
 .plan__duration-hint {
     font-size: 0.85rem;

@@ -27,6 +27,7 @@
     0% {
         transform: translateX(-100%);
     }
+
     100% {
         transform: translateX(100%);
     }
@@ -38,15 +39,19 @@
 }
 
 @keyframes pulse-icon {
-    0%, 100% {
+
+    0%,
+    100% {
         opacity: 0.3;
         transform: scale(1);
     }
+
     50% {
         opacity: 0.5;
         transform: scale(1.05);
     }
 }
+
 /* ===== Landing Page ===== */
 
 .landing {
@@ -146,7 +151,7 @@
     position: relative;
     z-index: 1;
     text-align: center;
-    padding-top: clamp(80px, 15vh, 140px);
+    padding-top: clamp(48px, 10vh, 100px);
     margin-bottom: 48px;
 }
 
