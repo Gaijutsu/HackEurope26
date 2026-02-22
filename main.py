@@ -64,6 +64,7 @@ class UserLogin(BaseModel):
 class TripCreate(BaseModel):
     title: str
     destination: str
+    origin_city: str = ""
     start_date: str  # YYYY-MM-DD
     end_date: str  # YYYY-MM-DD
     num_travelers: int = 1
@@ -90,6 +91,9 @@ class PlanResponse(BaseModel):
     itinerary: List[Dict]
     is_country_level: bool
     planning_summary: str
+
+class ChatRequest(BaseModel):
+    message: str
 
 # Helper functions
 def hash_password(password: str) -> str:
@@ -194,6 +198,7 @@ def create_trip(trip: TripCreate, user_id: str):
         user_id=user_id,
         title=trip.title,
         destination=trip.destination,
+        origin_city=trip.origin_city,
         destination_type="country" if planning_agent._is_likely_country(trip.destination) else "city",
         start_date=trip.start_date,
         end_date=trip.end_date,
@@ -328,12 +333,27 @@ def start_planning(trip_id: str, user_id: str):
     if not trip:
         raise HTTPException(status_code=404, detail="Trip not found")
 
+    # Don't restart planning that is already done or running
+    if trip.planning_status == "completed" and trip.plan_data:
+        return {
+            "status": "completed",
+            "message": "Planning already completed.",
+            "summary": trip.plan_data.get("planning_summary", ""),
+            "cities": trip.plan_data.get("cities", []),
+            "flights_count": len(trip.plan_data.get("flights", [])),
+            "accommodations_count": len(trip.plan_data.get("accommodations", [])),
+            "days_planned": len(trip.plan_data.get("itinerary", [])),
+        }
+    if trip.planning_status == "in_progress":
+        raise HTTPException(status_code=409, detail="Planning is already in progress")
+
     trip.planning_status = "in_progress"
     db.commit()
 
     try:
         plan_data = planning_agent.plan_trip({
             "destination": trip.destination,
+            "origin_city": trip.origin_city or "",
             "start_date": trip.start_date,
             "end_date": trip.end_date,
             "num_travelers": trip.num_travelers,
@@ -367,11 +387,28 @@ def stream_planning(trip_id: str, user_id: str):
     if not trip:
         raise HTTPException(status_code=404, detail="Trip not found")
 
+    # If already completed, return the cached plan as a single SSE event
+    if trip.planning_status == "completed" and trip.plan_data:
+        def _cached():
+            event = {"type": "complete", "agent": "Orchestrator",
+                     "status": "complete", "message": "Trip plan already exists.",
+                     "plan": trip.plan_data}
+            yield f"data: {json.dumps(event, default=str)}\n\n"
+        return StreamingResponse(
+            _cached(), media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # Reject if another stream is already running for this trip
+    if trip.planning_status == "in_progress":
+        raise HTTPException(status_code=409, detail="Planning is already in progress")
+
     trip.planning_status = "in_progress"
     db.commit()
 
     trip_data = {
         "destination": trip.destination,
+        "origin_city": trip.origin_city or "",
         "start_date": trip.start_date,
         "end_date": trip.end_date,
         "num_travelers": trip.num_travelers,
@@ -476,6 +513,7 @@ def regenerate_itinerary(trip_id: str, user_id: str):
 
     trip_data = {
         "destination": trip.destination,
+        "origin_city": trip.origin_city or "",
         "start_date": trip.start_date,
         "end_date": trip.end_date,
         "num_travelers": trip.num_travelers,
@@ -527,6 +565,78 @@ def regenerate_itinerary(trip_id: str, user_id: str):
         "message": "Itinerary regenerated successfully!",
         "days_planned": len(new_itinerary),
     }
+
+# ---------------------------------------------------------------------------
+# Chat-based itinerary modification
+# ---------------------------------------------------------------------------
+
+@app.post("/trips/{trip_id}/chat")
+def chat_modify_itinerary(trip_id: str, body: ChatRequest, user_id: str):
+    """Use an LLM agent to modify the itinerary based on a natural-language message."""
+    db = get_db()
+    trip = db.query(Trip).filter(Trip.id == trip_id, Trip.user_id == user_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    if not trip.plan_data or not trip.plan_data.get("itinerary"):
+        raise HTTPException(status_code=400, detail="Trip has no itinerary to modify")
+
+    trip_data = {
+        "destination": trip.destination,
+        "origin_city": trip.origin_city or "",
+        "start_date": trip.start_date,
+        "end_date": trip.end_date,
+        "num_travelers": trip.num_travelers,
+        "interests": trip.interests,
+        "dietary_restrictions": trip.dietary_restrictions,
+        "budget_level": trip.budget_level,
+    }
+
+    current_itinerary = trip.plan_data["itinerary"]
+
+    try:
+        result = planning_agent.modify_itinerary_chat(
+            trip_data, current_itinerary, body.message
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chat modification failed: {str(e)}")
+
+    new_itinerary = result["itinerary"]
+    reply = result["reply"]
+
+    # Delete old itinerary items and save new ones
+    db.query(ItineraryItem).filter(ItineraryItem.trip_id == trip_id).delete()
+
+    for day in new_itinerary:
+        for item in day.get("items", []):
+            db.add(ItineraryItem(
+                trip_id=trip.id,
+                day_number=day["day_number"],
+                title=item["title"],
+                description=item.get("description", ""),
+                start_time=item["start_time"],
+                duration_minutes=item["duration_minutes"],
+                item_type=item["item_type"],
+                location=item.get("location", ""),
+                cost=item.get("cost_usd", item.get("cost", 0)),
+                currency=item.get("currency", "USD"),
+                booking_url=item.get("google_maps_url", item.get("booking_url")),
+                status="planned",
+                delayed_to_day=None,
+                is_ai_suggested=item.get("is_ai_suggested", 1),
+            ))
+
+    # Update plan_data with new itinerary
+    updated_plan = dict(trip.plan_data)
+    updated_plan["itinerary"] = new_itinerary
+    trip.plan_data = updated_plan
+    db.commit()
+
+    return {
+        "reply": reply,
+        "days_planned": len(new_itinerary),
+    }
+
 
 # Itinerary endpoints
 @app.get("/trips/{trip_id}/itinerary")

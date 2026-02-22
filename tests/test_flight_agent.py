@@ -58,7 +58,8 @@ class TestSearchFlightsAmadeus:
                 currencyCode="USD",
                 max=10,
             )
-            assert result == [{"type": "flight-offer"}]
+            # FlightAgent attaches _carriers from the response dictionaries
+            assert result[0]["type"] == "flight-offer"
 
     def test_omits_return_date_for_one_way(self):
         mock_resp = MagicMock()
