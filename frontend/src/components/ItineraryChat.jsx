@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
+import { useParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
+import { useAuth } from '../contexts/AuthContext'
+import * as api from '../api'
 import './ItineraryChat.css'
 
 const SUGGESTIONS = [
@@ -12,11 +15,28 @@ const SUGGESTIONS = [
 ]
 
 export default function ItineraryChat({ onSend, loading }) {
+  const { tripId } = useParams()
+  const { user } = useAuth()
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
+  const [historyLoaded, setHistoryLoaded] = useState(false)
   const bottomRef = useRef(null)
   const inputRef = useRef(null)
+
+  // Load chat history on first open
+  useEffect(() => {
+    if (open && !historyLoaded && tripId && user?.id) {
+      api.getChatHistory(tripId, user.id)
+        .then((data) => {
+          if (data.messages?.length) {
+            setMessages(data.messages.map((m) => ({ role: m.role, text: m.content })))
+          }
+          setHistoryLoaded(true)
+        })
+        .catch(() => setHistoryLoaded(true))
+    }
+  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })

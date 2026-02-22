@@ -283,3 +283,42 @@ export async function createCheckoutSession(userId, packageId) {
 export async function verifyCheckoutSuccess(userId, sessionId) {
   return apiFetch(`/credits/success?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(sessionId)}`)
 }
+
+// ── Budget tracker ────────────────────────────────────────────────────────
+
+export async function getTripBudget(tripId, userId) {
+  return apiFetch(`/trips/${tripId}/budget?user_id=${encodeURIComponent(userId)}`)
+}
+
+// ── Disruption / weather monitor ──────────────────────────────────────────
+
+export async function getDisruptions(tripId, userId) {
+  return apiFetch(`/trips/${tripId}/disruptions?user_id=${encodeURIComponent(userId)}`)
+}
+
+// ── Travel guide generator ────────────────────────────────────────────────
+
+export async function generateTravelGuide(tripId, userId) {
+  return apiFetch(`/trips/${tripId}/travel-guide?user_id=${encodeURIComponent(userId)}`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+// ── Chat history ──────────────────────────────────────────────────────────
+
+export async function getChatHistory(tripId, userId) {
+  return apiFetch(`/trips/${tripId}/chat/history?user_id=${encodeURIComponent(userId)}`)
+}
+
+// ── Booking verification ──────────────────────────────────────────────────
+
+export async function verifyBooking(tripId, itemType, itemId, sessionId, userId) {
+  const params = new URLSearchParams({
+    item_type: itemType,
+    item_id: itemId,
+    session_id: sessionId,
+    user_id: userId,
+  })
+  return apiFetch(`/trips/${tripId}/booking/verify?${params.toString()}`)
+}

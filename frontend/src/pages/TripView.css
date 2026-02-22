@@ -485,3 +485,239 @@
     padding-left: 10px;
   }
 }
+
+/* ===== Budget Tracker ===== */
+
+.budget-tracker {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px;
+  margin-bottom: 24px;
+}
+
+.budget-tracker__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.budget-tracker__title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.budget-tracker__level {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  text-transform: capitalize;
+}
+
+.budget-tracker__bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.budget-tracker__bar {
+  flex: 1;
+  height: 10px;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 100px;
+  overflow: hidden;
+  display: flex;
+}
+
+.budget-tracker__bar-booked {
+  height: 100%;
+  background: linear-gradient(90deg, #00b894, #00cec9);
+  border-radius: 100px 0 0 100px;
+  transition: width 0.5s ease;
+}
+
+.budget-tracker__bar-planned {
+  height: 100%;
+  background: linear-gradient(90deg, #fdcb6e, #ffeaa7);
+  transition: width 0.5s ease;
+}
+
+.budget-tracker__label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.budget-tracker__breakdown {
+  display: flex;
+  gap: 20px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+/* ===== Disruption Alerts ===== */
+
+.disruption-alerts {
+  margin-bottom: 24px;
+}
+
+.disruption-alerts__title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+.disruption-alerts__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.disruption-alert {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  border-left: 4px solid #fdcb6e;
+}
+
+.disruption-alert--high {
+  border-left-color: #e17055;
+  background: rgba(225, 112, 85, 0.04);
+}
+
+.disruption-alert--medium {
+  border-left-color: #fdcb6e;
+  background: rgba(253, 203, 110, 0.04);
+}
+
+.disruption-alert--low {
+  border-left-color: #81ecec;
+}
+
+.disruption-alert__info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.disruption-alert__title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.disruption-alert__msg {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.disruption-alert__adapt-btn {
+  padding: 6px 14px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent-deep);
+  background: rgba(196, 139, 147, 0.1);
+  border: 1px solid rgba(196, 139, 147, 0.2);
+  border-radius: 100px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--transition-fast);
+}
+
+.disruption-alert__adapt-btn:hover {
+  background: rgba(196, 139, 147, 0.2);
+}
+
+/* ===== Travel Guide ===== */
+
+.travel-guide-section {
+  margin-bottom: 28px;
+}
+
+.travel-guide-section__btn {
+  padding: 12px 24px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--accent-deep);
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: 100px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.travel-guide-section__btn:hover:not(:disabled) {
+  background: rgba(196, 139, 147, 0.08);
+  border-color: var(--accent);
+}
+
+.travel-guide-section__btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.travel-guide-section__content {
+  position: relative;
+  margin-top: 16px;
+  padding: 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.travel-guide-section__close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.travel-guide-section__text {
+  font-size: 0.88rem;
+  line-height: 1.65;
+  color: var(--text-primary);
+}
+
+.travel-guide-section__text h2 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin: 20px 0 8px;
+  color: var(--text-primary);
+}
+
+.travel-guide-section__text h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 14px 0 6px;
+  color: var(--text-secondary);
+}
+
+.travel-guide-section__text li {
+  margin-left: 20px;
+  margin-bottom: 4px;
+}
+
+.travel-guide-section__text p {
+  margin-bottom: 6px;
+}

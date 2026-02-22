@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useAuth } from '../contexts/AuthContext'
 import * as api from '../api'
@@ -28,12 +28,33 @@ export default function Flights() {
   const { tripId } = useParams()
   const { user } = useAuth()
 
+  const [searchParams, setSearchParams] = useSearchParams()
   const [flights, setFlights] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [bookingMsg, setBookingMsg] = useState('')
 
   useEffect(() => {
     loadFlights()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Handle Stripe redirect: verify booking on return
+  useEffect(() => {
+    const bookedId = searchParams.get('booked')
+    const sessionId = searchParams.get('session_id')
+    if (bookedId && sessionId) {
+      api.verifyBooking(tripId, 'flight', bookedId, sessionId, user.id)
+        .then(() => {
+          setBookingMsg('✅ Flight booked successfully!')
+          setFlights((prev) =>
+            prev.map((f) => (f.id === bookedId ? { ...f, status: 'booked' } : f))
+          )
+          // Clean up URL params
+          setSearchParams({})
+          setTimeout(() => setBookingMsg(''), 4000)
+        })
+        .catch(() => setBookingMsg('⚠️ Could not verify booking — please check your email.'))
+    }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadFlights() {
@@ -51,6 +72,12 @@ export default function Flights() {
   async function handleBook(flightId) {
     try {
       const result = await api.bookFlight(tripId, flightId, user.id)
+      // If backend returns a Stripe Checkout URL, redirect to it
+      if (result.url) {
+        window.location.href = result.url
+        return
+      }
+      // Fallback: direct booking (Stripe not configured)
       setFlights((prev) =>
         prev.map((f) => (f.id === flightId ? { ...f, status: 'booked' } : f))
       )
@@ -95,6 +122,7 @@ export default function Flights() {
         <h1 className="flights-page__title">✈️ Flights</h1>
       </header>
 
+      {bookingMsg && <div className="flights-page__success">{bookingMsg}</div>}
       {error && <div className="flights-page__error">{error}</div>}
 
       {!loading && flights.length === 0 ? (
