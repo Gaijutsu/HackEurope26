@@ -558,6 +558,106 @@
   color: var(--text-muted);
 }
 
+/* ===== Split Payments Summary ===== */
+
+.split-summary {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  margin-bottom: 24px;
+}
+
+.split-summary__title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 16px;
+}
+
+.split-summary__list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.split-summary__item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.split-summary__item--complete {
+  border-color: #00b894;
+  background: rgba(0, 184, 148, 0.04);
+}
+
+.split-summary__item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--border);
+}
+
+.split-summary__item-type {
+  font-weight: 600;
+  color: var(--text-primary);
+  text-transform: capitalize;
+}
+
+.split-summary__item-progress {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.split-summary__shares {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.split-summary__share {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+}
+
+.split-summary__share-name {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.split-summary__share-amount {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.split-summary__share-status {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 100px;
+}
+
+.split-summary__share-status--pending {
+  background: #fff3e0;
+  color: #e65100;
+}
+
+.split-summary__share-status--paid {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
 /* ===== Disruption Alerts ===== */
 
 .disruption-alerts {

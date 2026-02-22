@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { useAuth } from '../contexts/AuthContext'
 import * as api from '../api'
 import TripNav from '../components/TripNav'
+import SplitPaymentModal from '../components/SplitPaymentModal'
 import './Flights.css'
 
 const pageVariants = {
@@ -33,10 +34,23 @@ export default function Flights() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [bookingMsg, setBookingMsg] = useState('')
+  const [splitModalOpen, setSplitModalOpen] = useState(false)
+  const [selectedFlight, setSelectedFlight] = useState(null)
+  const [trip, setTrip] = useState(null)
 
   useEffect(() => {
     loadFlights()
+    loadTrip()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadTrip() {
+    try {
+      const data = await api.getTrip(tripId, user.id)
+      setTrip(data)
+    } catch (err) {
+      console.error('Failed to load trip:', err)
+    }
+  }
 
   // Handle Stripe redirect: verify booking on return
   useEffect(() => {
@@ -89,6 +103,11 @@ export default function Flights() {
     }
   }
 
+  function openSplitModal(flight) {
+    setSelectedFlight(flight)
+    setSplitModalOpen(true)
+  }
+
   async function handleSelect(flightId, flightType) {
     try {
       await api.selectFlight(tripId, flightId, user.id)
@@ -125,6 +144,19 @@ export default function Flights() {
       {bookingMsg && <div className="flights-page__success">{bookingMsg}</div>}
       {error && <div className="flights-page__error">{error}</div>}
 
+      <SplitPaymentModal
+        isOpen={splitModalOpen}
+        onClose={() => setSplitModalOpen(false)}
+        tripId={tripId}
+        userId={user.id}
+        itemType="flight"
+        itemId={selectedFlight?.id}
+        itemName={selectedFlight ? `${selectedFlight.airline} ${selectedFlight.flight_number}` : ''}
+        totalCost={selectedFlight?.price}
+        numTravelers={trip?.num_travelers || 1}
+        currency={selectedFlight?.currency}
+      />
+
       {!loading && flights.length === 0 ? (
         <div className="flights-page__empty">
           <p>No flights found. Start planning to generate flight options.</p>
@@ -141,6 +173,8 @@ export default function Flights() {
                     flight={flight}
                     onBook={() => handleBook(flight.id)}
                     onSelect={() => handleSelect(flight.id, flight.flight_type)}
+                    onSplit={() => openSplitModal(flight)}
+                    numTravelers={trip?.num_travelers || 1}
                   />
                 ))}
               </div>
@@ -157,6 +191,8 @@ export default function Flights() {
                     flight={flight}
                     onBook={() => handleBook(flight.id)}
                     onSelect={() => handleSelect(flight.id, flight.flight_type)}
+                    onSplit={() => openSplitModal(flight)}
+                    numTravelers={trip?.num_travelers || 1}
                   />
                 ))}
               </div>
@@ -168,7 +204,7 @@ export default function Flights() {
   )
 }
 
-function FlightCard({ flight, onBook, onSelect }) {
+function FlightCard({ flight, onBook, onSelect, onSplit, numTravelers }) {
   const isBooked = flight.status === 'booked'
   const isSelected = flight.status === 'selected'
 
@@ -218,6 +254,15 @@ function FlightCard({ flight, onBook, onSelect }) {
             <button className="flight-card__action flight-card__action--book" onClick={onBook}>
               Book
             </button>
+            {numTravelers > 1 && (
+              <button 
+                className="flight-card__action flight-card__action--split"
+                onClick={onSplit}
+                title="Split payment between travelers"
+              >
+                💰 Split ({numTravelers})
+              </button>
+            )}
             {flight.booking_url && (
               <a
                 href={flight.booking_url}

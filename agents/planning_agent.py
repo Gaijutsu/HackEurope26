@@ -1,15 +1,24 @@
 """
-CrewAI Multi-Agent Trip Planner
+Direct LLM Trip Planner (litellm — no CrewAI overhead)
 
-Orchestrates a crew of specialized agents that collaborate to plan trips:
-  1. DestinationResearcher  - web search + LLM for destination intel
-  2. CitySelector           - picks cities for country-level trips
-  3. FlightFinder           - uses Amadeus flight search (via FlightAgent)
-  4. AccommodationFinder    - uses Amadeus hotel search (via AccomAgent)
-  5. ItineraryPlanner       - builds the final day-by-day plan
+Replaces the CrewAI multi-agent crew with direct litellm.completion() calls.
+Same 5 logical steps, but each is a single LLM call (or no LLM at all for
+flights/hotels which are pure API lookups):
 
-FlightAgent and AccomAgent are used both as tools within the crew AND
-to generate the final structured data returned to the frontend.
+  1. Research + City Selection  → 1 LLM call
+  2. Flight search              → direct Amadeus / mock (no LLM)
+  3. Accommodation search       → direct Amadeus / mock (no LLM)
+  4. Itinerary generation       → 1 LLM call  (receives flights + hotels + research)
+  5. Validation (optional)      → 1 LLM call
+
+Total: 3 LLM round-trips instead of ~25 with CrewAI's ReAct loops.
+
+The coordination that mattered in the old system is preserved:
+  • Research informs city selection (same LLM call).
+  • Cities determine which flights/hotels to search (direct API calls).
+  • Flight arrival times + hotel locations are passed as context to the
+    itinerary generator so it can plan Day 1 around arrival, cluster
+    activities near the hotel, etc.
 """
 
 from __future__ import annotations
@@ -22,24 +31,22 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Any, Dict, Generator, List, Optional
 
+import litellm
+
 logger = logging.getLogger(__name__)
 
-from crewai import Agent, Crew, Process, Task
-from crewai.tools import tool as crewai_tool
+# Silence litellm's own verbose logging
+litellm.suppress_debug_info = True
+# Drop params unsupported by the active model (e.g. temperature on gpt-5)
+litellm.drop_params = True
 
-# Thread-safe caches — avoid duplicate API calls between agent tools
-# and the result-parsing phase that builds the final DB-ready data.
+# Thread-safe caches — avoid duplicate API calls
 _flight_cache: dict[str, list] = {}
 _hotel_cache: dict[str, list] = {}
 _cache_lock = threading.Lock()
 
-TRACING = True
-VERBOSE = True
-
 # ---------------------------------------------------------------------------
 # Import Amadeus-backed tools from sub-agents.
-# Try relative import (when loaded as agents.planning_agent package member),
-# fall back to absolute (when loaded directly from sys.path in tests).
 # ---------------------------------------------------------------------------
 try:
     from .FlightAgent import search_flights as _amadeus_flights_tool
@@ -51,7 +58,7 @@ except ImportError:
 _amadeus_flights_fn = _amadeus_flights_tool.func
 _amadeus_hotels_fn = _amadeus_hotels_tool.func
 
-# Optional: web search & scraping tools (need TAVILY_API_KEY / SERPER_API_KEY)
+# Optional: web search tools (kept for travel-guide endpoint in main.py)
 _web_search_tools: list = []
 try:
     if os.getenv("TAVILY_API_KEY"):
@@ -61,13 +68,84 @@ try:
         from crewai_tools import SerperDevTool
         _web_search_tools.append(SerperDevTool())
 except Exception:
-    pass  # web search unavailable - agents will use LLM knowledge only
+    pass
 
 try:
     from crewai_tools import ScrapeWebsiteTool
     _scrape_tool = ScrapeWebsiteTool()
 except Exception:
     _scrape_tool = None
+
+
+# ---------------------------------------------------------------------------
+# Direct web search (Tavily / Serper — no CrewAI agent overhead)
+# ---------------------------------------------------------------------------
+
+def _web_search(query: str, max_results: int = 5) -> str:
+    """Run a web search via Tavily or Serper for real-time destination info.
+
+    Returns a string of search-result snippets, or empty string if
+    no search API key is configured.
+    """
+    # Try Tavily first
+    tavily_key = os.getenv("TAVILY_API_KEY")
+    if tavily_key:
+        try:
+            from tavily import TavilyClient
+            client = TavilyClient(api_key=tavily_key)
+            result = client.search(query, max_results=max_results)
+            snippets = []
+            for r in result.get("results", []):
+                title = r.get("title", "")
+                content = r.get("content", "")[:300]
+                snippets.append(f"- {title}: {content}")
+            if snippets:
+                return "\n".join(snippets)
+        except Exception as exc:
+            logger.warning("Tavily search failed: %s", exc)
+
+    # Try Serper
+    serper_key = os.getenv("SERPER_API_KEY")
+    if serper_key:
+        try:
+            import requests
+            resp = requests.post(
+                "https://google.serper.dev/search",
+                json={"q": query, "num": max_results},
+                headers={"X-API-KEY": serper_key},
+                timeout=10,
+            )
+            data = resp.json()
+            snippets = []
+            for r in data.get("organic", []):
+                title = r.get("title", "")
+                snippet_text = r.get("snippet", "")
+                snippets.append(f"- {title}: {snippet_text}")
+            if snippets:
+                return "\n".join(snippets)
+        except Exception as exc:
+            logger.warning("Serper search failed: %s", exc)
+
+    return ""
+
+
+def _gather_city_data(cities: list[str]) -> str:
+    """Collect structured neighbourhood data for each city.
+
+    Uses get_city_info() which provides SPECIFIC named restaurants, attractions,
+    and food stalls grouped by neighbourhood/district.  This data is injected
+    into LLM prompts so the model uses real place names instead of hallucinating.
+    """
+    from mock_data import get_city_info as _gci
+    all_data = {}
+    for city in cities:
+        info = _gci(city)
+        if info:
+            all_data[city] = info
+    if not all_data:
+        return ""
+    return json.dumps(all_data, indent=2, default=str)
+
 
 from mock_data import (
     generate_mock_flights,
@@ -82,12 +160,7 @@ except ImportError:
     from RouteAgent import compute_routes_for_day  # type: ignore
 
 # ---------------------------------------------------------------------------
-# IATA code mappings (city name → airport/city code for Amadeus)
-#
-# The hardcoded dicts serve as a fast first-pass lookup.  For cities NOT
-# in the dict, we try the Amadeus Locations API (if credentials exist),
-# then fall back to mock_data.get_airport_for_city().
-# All results are cached at runtime so each city is resolved at most once.
+# IATA code mappings
 # ---------------------------------------------------------------------------
 
 _CITY_TO_AIRPORT: dict[str, str] = {
@@ -98,7 +171,6 @@ _CITY_TO_AIRPORT: dict[str, str] = {
     "San Francisco": "SFO", "Miami": "MIA", "Boston": "BOS", "Kyoto": "KIX",
     "Osaka": "KIX", "Madrid": "MAD", "Lisbon": "LIS", "Vienna": "VIE",
     "Zurich": "ZRH", "Copenhagen": "CPH", "Stockholm": "ARN", "Seoul": "ICN",
-    # Extended coverage
     "Munich": "MUC", "Hamburg": "HAM", "Milan": "MXP", "Florence": "FLR",
     "Venice": "VCE", "Naples": "NAP", "Nice": "NCE", "Lyon": "LYS",
     "Seville": "SVQ", "Malaga": "AGP", "Athens": "ATH", "Edinburgh": "EDI",
@@ -128,7 +200,6 @@ _CITY_TO_IATA_CITY: dict[str, str] = {
     "San Francisco": "SFO", "Miami": "MIA", "Boston": "BOS", "Kyoto": "OSA",
     "Osaka": "OSA", "Madrid": "MAD", "Lisbon": "LIS", "Vienna": "VIE",
     "Zurich": "ZRH", "Copenhagen": "CPH", "Stockholm": "STO", "Seoul": "SEL",
-    # Extended
     "Munich": "MUC", "Hamburg": "HAM", "Milan": "MIL", "Florence": "FLR",
     "Venice": "VCE", "Naples": "NAP", "Nice": "NCE", "Lyon": "LYS",
     "Athens": "ATH", "Edinburgh": "EDI", "Dublin": "DUB",
@@ -140,16 +211,11 @@ _CITY_TO_IATA_CITY: dict[str, str] = {
     "Montreal": "YMQ",
 }
 
-# Runtime cache for Amadeus Location API lookups (survives across calls)
 _iata_lookup_cache: dict[str, str] = {}
 
 
 def _amadeus_location_lookup(city: str, subtype: str = "AIRPORT") -> Optional[str]:
-    """Query the Amadeus Locations API for the IATA code of *city*.
-
-    ``subtype`` can be ``"AIRPORT"`` or ``"CITY"``.
-    Returns the IATA code string, or *None* on failure / missing credentials.
-    """
+    """Query the Amadeus Locations API for the IATA code of *city*."""
     cache_key = f"{subtype}|{city}"
     if cache_key in _iata_lookup_cache:
         return _iata_lookup_cache[cache_key]
@@ -157,15 +223,12 @@ def _amadeus_location_lookup(city: str, subtype: str = "AIRPORT") -> Optional[st
     if not os.getenv("AMADEUS_CLIENT_ID"):
         return None
     try:
-        from amadeus import Client, ResponseError  # already in deps
+        from amadeus import Client, ResponseError
         _am = Client(
             client_id=os.getenv("AMADEUS_CLIENT_ID", ""),
             client_secret=os.getenv("AMADEUS_CLIENT_SECRET", ""),
         )
-        resp = _am.reference_data.locations.get(
-            keyword=city,
-            subType=subtype,
-        )
+        resp = _am.reference_data.locations.get(keyword=city, subType=subtype)
         if resp.data:
             code = resp.data[0].get("iataCode", "")
             if code:
@@ -177,32 +240,24 @@ def _amadeus_location_lookup(city: str, subtype: str = "AIRPORT") -> Optional[st
 
 
 def _airport_code(city: str) -> str:
-    """Resolve a city name to an IATA airport code.
-
-    Lookup chain: hardcoded dict → Amadeus API → mock_data fallback.
-    """
+    """Resolve a city name to an IATA airport code."""
     if city in _CITY_TO_AIRPORT:
         return _CITY_TO_AIRPORT[city]
-    # Try Amadeus Location API
     code = _amadeus_location_lookup(city, "AIRPORT")
     if code:
-        _CITY_TO_AIRPORT[city] = code  # cache for rest of session
+        _CITY_TO_AIRPORT[city] = code
         return code
     return get_airport_for_city(city)
 
 
 def _city_iata(city: str) -> str:
-    """Resolve a city name to an IATA *city* code (for hotel searches).
-
-    Lookup chain: hardcoded dict → Amadeus API → first 3 letters fallback.
-    """
+    """Resolve a city name to an IATA *city* code (for hotel searches)."""
     if city in _CITY_TO_IATA_CITY:
         return _CITY_TO_IATA_CITY[city]
     code = _amadeus_location_lookup(city, "CITY")
     if code:
         _CITY_TO_IATA_CITY[city] = code
         return code
-    # Last resort: try the airport code (often works for small cities)
     apt = _CITY_TO_AIRPORT.get(city)
     if apt:
         return apt
@@ -210,7 +265,7 @@ def _city_iata(city: str) -> str:
 
 
 def _is_mock_flight(f: dict) -> bool:
-    """True when a dict looks like mock-data format (has the keys the DB expects)."""
+    """True when a dict looks like mock-data format."""
     return "flight_type" in f and "airline" in f and "flight_number" in f
 
 
@@ -218,8 +273,6 @@ def _is_mock_accom(a: dict) -> bool:
     return "name" in a and "price_per_night" in a and "check_in_date" in a
 
 
-# Well-known IATA carrier codes → human-readable names (fallback for when
-# the Amadeus `dictionaries` block is not available).
 _CARRIER_NAMES: dict[str, str] = {
     "AA": "American Airlines", "DL": "Delta Air Lines", "UA": "United Airlines",
     "LH": "Lufthansa", "BA": "British Airways", "AF": "Air France",
@@ -245,18 +298,12 @@ def _parse_iso_duration(iso: str) -> int:
     m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?", iso or "")
     if not m:
         return 0
-    hours = int(m.group(1) or 0)
-    mins = int(m.group(2) or 0)
-    return hours * 60 + mins
+    return int(m.group(1) or 0) * 60 + int(m.group(2) or 0)
 
 
 def _normalize_amadeus_flights(raw_offers: list[dict], origin_city: str,
                                 dest_city: str) -> list[dict]:
-    """Convert Amadeus FlightOffer objects into the DB-compatible schema.
-
-    Each Amadeus offer may contain 1 itinerary (one-way) or 2 (round-trip).
-    We flatten each itinerary into a separate DB row.
-    """
+    """Convert Amadeus FlightOffer objects into the DB-compatible schema."""
     normalized: list[dict] = []
     for idx, offer in enumerate(raw_offers):
         carriers_dict = offer.get("_carriers", {})
@@ -271,28 +318,21 @@ def _normalize_amadeus_flights(raw_offers: list[dict], origin_city: str,
 
             first_seg = segments[0]
             last_seg = segments[-1]
-
             carrier_code = first_seg.get("carrierCode", "")
             airline_name = (carriers_dict.get(carrier_code)
                            or _CARRIER_NAMES.get(carrier_code)
                            or carrier_code)
             flight_number = f"{carrier_code}{first_seg.get('number', '')}"
-
             from_airport = first_seg.get("departure", {}).get("iataCode", "")
             to_airport = last_seg.get("arrival", {}).get("iataCode", "")
             dep_dt = first_seg.get("departure", {}).get("at", "")
             arr_dt = last_seg.get("arrival", {}).get("at", "")
             duration_min = _parse_iso_duration(itin.get("duration", ""))
-
-            # Determine flight type from itinerary index
             flight_type = "outbound" if itin_idx == 0 else "return"
-
-            # Build booking URL (generic search fallback)
             booking_url = (
                 f"https://www.google.com/travel/flights?q="
                 f"{from_airport}+to+{to_airport}+{dep_dt[:10]}"
             )
-
             normalized.append({
                 "id": f"flight_{flight_type}_{idx}",
                 "flight_type": flight_type,
@@ -327,21 +367,15 @@ def _normalize_amadeus_hotels(raw_hotels: list[dict], city: str,
         offers = hotel_data.get("offers", [])
         if not offers:
             continue
-        best_offer = offers[0]  # first offer is typically cheapest
+        best_offer = offers[0]
 
         total_price = float(best_offer.get("price", {}).get("total", 0))
         currency = best_offer.get("price", {}).get("currency", "USD")
         price_per_night = round(total_price / nights, 2)
-
-        # Build address string from hotel info
         name = hotel_info.get("name", f"Hotel in {city}")
         lat = hotel_info.get("latitude")
         lon = hotel_info.get("longitude")
-
-        # Room amenities from description
-        room_desc = (best_offer.get("room", {})
-                     .get("description", {})
-                     .get("text", ""))
+        room_desc = (best_offer.get("room", {}).get("description", {}).get("text", ""))
         amenities = []
         if "wifi" in room_desc.lower() or "internet" in room_desc.lower():
             amenities.append("wifi")
@@ -352,7 +386,6 @@ def _normalize_amadeus_hotels(raw_hotels: list[dict], city: str,
             f"https://www.google.com/travel/hotels?q="
             f"{name.replace(' ', '+')}+{city.replace(' ', '+')}"
         )
-
         normalized.append({
             "id": f"acc_{idx}",
             "name": name,
@@ -364,7 +397,7 @@ def _normalize_amadeus_hotels(raw_hotels: list[dict], city: str,
             "price_per_night": price_per_night,
             "total_price": round(total_price, 2),
             "currency": currency,
-            "rating": None,  # not available in Hotel Offers Search v3
+            "rating": None,
             "amenities": amenities,
             "booking_url": booking_url,
             "status": "suggested",
@@ -447,7 +480,7 @@ def _fallback_day_plan(city: str, day_number: int) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# LLM model helper  (supports OpenAI, Gemini, Claude via LLM_PROVIDER env var)
+# LLM model helper  (supports OpenAI, Gemini, Claude via LLM_PROVIDER)
 # ---------------------------------------------------------------------------
 
 _LLM_DEFAULTS = {
@@ -458,508 +491,293 @@ _LLM_DEFAULTS = {
 
 
 def _llm_name() -> str:
-    """Return the model string in CrewAI's native `provider/model` format."""
+    """Return the litellm model string (provider/model format)."""
     provider = os.getenv("LLM_PROVIDER", "openai").lower().strip()
     if provider not in _LLM_DEFAULTS:
         provider = "openai"
     model = os.getenv("LLM_MODEL", _LLM_DEFAULTS[provider])
     if provider == "openai":
-        return model
+        return model  # litellm uses bare model name for OpenAI
     return f"{provider}/{model}"
 
 
 # ---------------------------------------------------------------------------
-# CrewAI Tools
-# Wrap Amadeus-backed tools with city-name → IATA conversion so that
-# the LLM can pass plain city names without knowing IATA codes.
+# Core LLM call wrapper
 # ---------------------------------------------------------------------------
 
-@crewai_tool("Search Flights")
-def search_flights_tool(
-    origin: str,
-    destination: str,
-    departure_date: str,
-    return_date: str,
-    num_travelers: int = 1,
-) -> str:
-    """Search for flights between two cities. Call with EXACTLY these named parameters:
-      origin="London", destination="Dublin", departure_date="2026-02-23", return_date="2026-02-25", num_travelers=4
-    Do NOT pass a list or array — pass each argument as a single string/int value.
+def _llm_call(system_prompt: str, user_prompt: str, temperature: float = 0.7) -> str:
+    """Make a single litellm.completion() call and return the text content.
+
+    One call = one LLM round-trip, no ReAct loops.
     """
+    response = litellm.completion(
+        model=_llm_name(),
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=temperature,
+    )
+    return response.choices[0].message.content
+
+
+# ---------------------------------------------------------------------------
+# Direct tool wrappers (no LLM needed — deterministic API calls)
+# ---------------------------------------------------------------------------
+
+def _search_flights_direct(origin: str, destination: str, departure_date: str,
+                           return_date: str, num_travelers: int = 1) -> list[dict]:
+    """Search flights via Amadeus (or mock fallback). No LLM involved."""
     cache_key = f"flights|{origin.strip().lower()}|{destination.strip().lower()}|{departure_date}|{return_date}|{num_travelers}"
+    with _cache_lock:
+        cached = _flight_cache.get(cache_key)
+    if cached:
+        return cached
+
     origin_code = _airport_code(origin)
     dest_code = _airport_code(destination)
     results = _amadeus_flights_fn(origin_code, dest_code, departure_date, return_date, num_travelers)
+
     if results and "error" not in results[0]:
         if not _is_mock_flight(results[0]):
             results = _normalize_amadeus_flights(results, origin, destination)
         with _cache_lock:
             _flight_cache[cache_key] = list(results)
-        return json.dumps(results[:5], default=str)
-    # Amadeus failed — fall back to mock data
+        return results
+
+    # Fallback to mock data
     results = generate_mock_flights(origin, destination, departure_date, return_date or None, num_travelers)
     with _cache_lock:
         _flight_cache[cache_key] = list(results)
-    return json.dumps(results[:5], default=str)
+    return results
 
 
-@crewai_tool("Search Accommodations")
-def search_accommodations_tool(
-    city: str,
-    check_in_date: str,
-    check_out_date: str,
-    num_guests: int = 1,
-) -> str:
-    """Search for hotels in a city. Call with EXACTLY these named parameters:
-      city="Paris", check_in_date="2026-02-23", check_out_date="2026-02-25", num_guests=4
-    Do NOT pass a list or array — pass each argument as a single string/int value.
-    """
-    cache_key = f"hotels|{city.strip().lower()}|{check_in_date}|{check_out_date}|{num_guests}"
+def _search_hotels_direct(city: str, check_in: str, check_out: str,
+                          num_guests: int = 1) -> list[dict]:
+    """Search hotels via Amadeus (or mock fallback). No LLM involved."""
+    cache_key = f"hotels|{city.strip().lower()}|{check_in}|{check_out}|{num_guests}"
+    with _cache_lock:
+        cached = _hotel_cache.get(cache_key)
+    if cached:
+        return cached
+
     city_code = _city_iata(city)
-    results = _amadeus_hotels_fn(city_code, check_in_date, check_out_date, num_guests, "hotel")
+    results = _amadeus_hotels_fn(city_code, check_in, check_out, num_guests, "hotel")
+
     if results and "error" not in results[0]:
         if not _is_mock_accom(results[0]):
-            results = _normalize_amadeus_hotels(results, city, check_in_date, check_out_date)
+            results = _normalize_amadeus_hotels(results, city, check_in, check_out)
         with _cache_lock:
             _hotel_cache[cache_key] = list(results)
-        return json.dumps(results[:5], default=str)
-    results = generate_mock_accommodations(city, check_in_date, check_out_date, num_guests)
+        return results
+
+    results = generate_mock_accommodations(city, check_in, check_out, num_guests)
     with _cache_lock:
         _hotel_cache[cache_key] = list(results)
-    return json.dumps(results[:5], default=str)
+    return results
 
 
-@crewai_tool("Get City Information")
-def get_city_info_tool(city_name: str) -> str:
-    """Get information about a city: attractions, food, transport.
-    Args:
-        city_name: Name of the city (e.g. 'Tokyo')
-    Returns:
-        JSON string with city info.
+# ---------------------------------------------------------------------------
+# Step 1: Research + City Selection (1 LLM call)
+# ---------------------------------------------------------------------------
+
+_RESEARCH_SYSTEM = """\
+You are a seasoned travel researcher and city routing expert. You provide \
+structured, actionable travel information and select optimal cities for \
+multi-city trips. Always respond with valid JSON only — no markdown fences, \
+no extra text."""
+
+
+def _research_and_select_cities(
+    dest: str, duration: int, interests: str, budget: str, is_country: bool,
+) -> tuple[dict, list[str]]:
+    """Run destination research + city selection in one LLM call.
+
+    Enriched with web search (Tavily/Serper) and structured city data
+    (neighbourhoods, specific restaurants, attractions from get_city_info).
+
+    Returns (research_dict, list_of_cities).
     """
-    return json.dumps(get_city_info(city_name), default=str)
-
-
-# ---------------------------------------------------------------------------
-# CrewAI Agent definitions
-# ---------------------------------------------------------------------------
-
-def _build_agents():
-    """Create the five specialized agents with appropriate tools."""
-
-    researcher_tools = list(_web_search_tools)
-    if _scrape_tool:
-        researcher_tools.append(_scrape_tool)
-    researcher_tools.append(get_city_info_tool)
-
-    destination_researcher = Agent(
-        role="Destination Researcher",
-        goal="Research travel destinations thoroughly and provide practical information for trip planning",
-        backstory=(
-            "You are a seasoned travel researcher with extensive knowledge of destinations worldwide. "
-            "You excel at uncovering practical travel information including top attractions, local food, "
-            "transport tips, and budget considerations. You always provide structured, actionable information."
-        ),
-        tools=researcher_tools,
-        llm=_llm_name(),
-        verbose=VERBOSE,
-        allow_delegation=False,
-        max_iter=8,
+    # --- Real-time web search enrichment ---
+    web_results = _web_search(
+        f"{dest} travel guide best things to do {interests} 2026"
     )
-
-    selector_tools = list(_web_search_tools)
-    selector_tools.append(get_city_info_tool)
-
-    city_selector = Agent(
-        role="City Selection Specialist",
-        goal="Select the optimal cities to visit within a country for multi-city trips",
-        backstory=(
-            "You are a travel routing expert who knows which cities pair well together and how to "
-            "create logical, efficient multi-city itineraries. You consider travel distances, "
-            "city highlights, and traveler interests to select the best route."
-        ),
-        tools=selector_tools,
-        llm=_llm_name(),
-        verbose=VERBOSE,
-        allow_delegation=False,
-        max_iter=5,
-    )
-
-    flight_finder = Agent(
-        role="Flight Search Specialist",
-        goal="Find the best flight options using the Amadeus-powered flight search tool",
-        backstory=(
-            "You are a flight search expert who uses the Search Flights tool to find optimal air "
-            "travel options via the Amadeus GDS. Always use the tool with city names — IATA code "
-            "conversion is handled automatically. Never make up flight data. "
-            "CRITICAL: When calling the Search Flights tool, pass FLAT keyword arguments "
-            "(origin=\"London\", destination=\"Dublin\", ...). NEVER pass a JSON array or list."
-        ),
-        tools=[search_flights_tool],
-        llm=_llm_name(),
-        verbose=VERBOSE,
-        allow_delegation=False,
-        max_iter=5,
-    )
-
-    accommodation_finder = Agent(
-        role="Accommodation Search Specialist",
-        goal="Find the best places to stay for each city using the Amadeus-powered hotel search tool",
-        backstory=(
-            "You are an accommodation expert who uses the Search Accommodations tool to find hotels "
-            "via the Amadeus GDS. Always use the tool with city names — IATA conversion is automatic. "
-            "Never make up accommodation data. "
-            "CRITICAL: When calling the Search Accommodations tool, pass FLAT keyword arguments "
-            "(city=\"Paris\", check_in_date=\"2026-01-01\", ...). NEVER pass a JSON array or list."
-        ),
-        tools=[search_accommodations_tool],
-        llm=_llm_name(),
-        verbose=VERBOSE,
-        allow_delegation=False,
-        max_iter=5,
-    )
-
-    planner_tools = [get_city_info_tool]
-    planner_tools.extend(_web_search_tools)
-
-    itinerary_planner = Agent(
-        role="Itinerary Planner",
-        goal=(
-            "Create a detailed day-by-day itinerary with SPECIFIC named places for every "
-            "activity and meal, arranged so that consecutive activities are GEOGRAPHICALLY "
-            "CLOSE to each other. Cluster activities by neighbourhood to minimise travel "
-            "time. Never say 'find a local restaurant' — always name the exact restaurant, "
-            "cafe, or food stall. Include a Google Maps link for every location."
-        ),
-        backstory=(
-            "You are an expert itinerary designer, local food critic, and city logistics "
-            "planner who knows specific restaurants, cafes, and street food stalls in every "
-            "major city. Your TOP PRIORITY is geographic efficiency: you group activities "
-            "by neighbourhood so travellers walk between consecutive stops instead of "
-            "criss-crossing the city. You plan meals at restaurants NEAR the attractions "
-            "being visited that part of the day — breakfast near the hotel, lunch near the "
-            "morning's sights, dinner near the afternoon area or back near the hotel. "
-            "You ALWAYS recommend places by name (e.g. 'Ichiran Ramen Shibuya', "
-            "'Le Bouillon Chartier'). You never use generic phrases like 'find a local "
-            "restaurant' or 'try local food'. You include a Google Maps URL for every "
-            "single location in the itinerary. You understand local currencies and always "
-            "show prices in the local currency with a USD equivalent."
-        ),
-        tools=planner_tools,
-        llm=_llm_name(),
-        verbose=VERBOSE,
-        allow_delegation=False,
-        max_iter=10,
-    )
-
-    return (
-        destination_researcher,
-        city_selector,
-        flight_finder,
-        accommodation_finder,
-        itinerary_planner,
-    )
-
-
-# ---------------------------------------------------------------------------
-# PlanValidator — self-reflection agent that checks + fixes the itinerary
-# ---------------------------------------------------------------------------
-
-def _validate_and_fix_itinerary(itinerary: list[dict], dest: str, duration: int) -> tuple[list[dict], list[str]]:
-    """Run a validation agent that checks the itinerary for issues and fixes them.
-    
-    Returns (possibly_fixed_itinerary, list_of_issues_found).
-    """
-    if not itinerary:
-        return itinerary, []
-
-    itin_json = json.dumps(itinerary, indent=2, default=str)
-
-    validator_agent = Agent(
-        role="Trip Plan Validator",
-        goal=(
-            "Validate a travel itinerary for realism and fix any issues. Check geographic "
-            "coherence (no zig-zagging across the city), timing feasibility (not too many "
-            "activities, reasonable travel time), and completeness (meals included, costs "
-            "present). If issues are found, fix them and explain what you changed."
-        ),
-        backstory=(
-            "You are a meticulous travel plan reviewer. You catch mistakes that slip past "
-            "other planners: a restaurant visit scheduled at 3 AM, a museum visit on Monday "
-            "when it's closed on Mondays, jumping from one end of the city to the other "
-            "between consecutive items, or a day with 12 hours of back-to-back activities "
-            "with no rest. You fix these issues while preserving the spirit of the plan. "
-            "You also verify that costs are realistic — a café breakfast should not cost $200."
-        ),
-        tools=[get_city_info_tool],
-        llm=_llm_name(),
-        verbose=VERBOSE,
-        allow_delegation=False,
-        max_iter=5,
-    )
-
-    validate_task = Task(
-        description=f"""Review this {duration}-day itinerary for {dest} and fix any issues.
-
---- ITINERARY ---
-{itin_json}
---- END ---
-
-CHECK FOR:
-1. **Geographic coherence**: Are consecutive items in the same neighbourhood/area? Flag if
-   the plan jumps across the city between items.
-2. **Timing feasibility**: Are start times realistic? Is there enough time between items
-   (including travel)? Are any items scheduled before 6 AM or after midnight without reason?
-3. **Cost realism**: Are prices realistic for the destination? A breakfast should not cost $200.
-   A museum entry should not cost $2 in Europe.
-4. **Meal coverage**: Does each day have breakfast, lunch, and dinner at named restaurants?
-5. **Activity density**: No more than 7-8 items per day. People need rest.
-6. **Google Maps URLs**: Every item should have a google_maps_url.
-
-Return a JSON object:
-{{
-  "issues_found": ["issue 1 description", "issue 2 description", ...],
-  "fixes_applied": ["fix 1 description", "fix 2 description", ...],
-  "validated_itinerary": [ <the full itinerary — fixed if needed, unchanged if fine> ]
-}}
-
-If the itinerary is perfect, return empty arrays for issues_found and fixes_applied,
-and return the itinerary unchanged in validated_itinerary.
-
-Return ONLY valid JSON.""",
-        expected_output="A JSON object with issues_found, fixes_applied, and validated_itinerary.",
-        agent=validator_agent,
-    )
-
-    try:
-        crew = Crew(
-            agents=[validator_agent],
-            tasks=[validate_task],
-            process=Process.sequential,
-            verbose=VERBOSE,
+    web_context = ""
+    if web_results:
+        web_context = (
+            f"\n\nWEB SEARCH RESULTS (use for current, real information):\n"
+            f"{web_results}\n"
         )
-        crew.kickoff()
 
-        raw = validate_task.output.raw if validate_task.output else "{}"
-        result = _safe_json_parse(raw)
+    # --- Structured city data with specific named places ---
+    city_info = get_city_info(dest)  # works for city-level destinations
+    city_data_context = ""
+    if city_info and city_info.get("neighbourhoods"):
+        city_data_context = (
+            f"\n\nSTRUCTURED CITY DATA — use these SPECIFIC restaurants "
+            f"and attractions:\n"
+            f"{json.dumps(city_info, indent=2, default=str)[:3000]}\n"
+        )
 
-        issues = result.get("issues_found", [])
-        fixes = result.get("fixes_applied", [])
-        validated = result.get("validated_itinerary", itinerary)
+    if is_country:
+        city_instruction = f"""Also select the best 2-4 cities to visit in {dest} for a \
+{duration}-day trip. Order them in a logical route minimising backtracking. \
+Include the most popular city. Add a "cities" key with a JSON array of city names."""
+    else:
+        city_instruction = f"""The destination is the single city "{dest}".
+Add a "cities" key with the array ["{dest}"]."""
 
-        if isinstance(validated, list) and len(validated) > 0:
-            # Re-normalise fields
-            for day in validated:
-                city_name = day.get("city", dest)
-                for i, item in enumerate(day.get("items", [])):
-                    item.setdefault("id", f"day{day.get('day_number', 0)}_item{i}")
-                    item.setdefault("status", "planned")
-                    item.setdefault("delayed_to_day", None)
-                    item.setdefault("is_ai_suggested", 1)
-                    if "cost_usd" not in item:
-                        raw_cost = item.pop("cost", 0)
-                        item["cost_usd"] = raw_cost if isinstance(raw_cost, (int, float)) else 0
-                    item.setdefault("cost_local", f"${item['cost_usd']}")
-                    item.setdefault("currency", "USD")
-                    item["cost"] = item["cost_usd"]
-                    if not item.get("google_maps_url"):
-                        loc = item.get("location", item.get("title", city_name))
-                        item["google_maps_url"] = _gmaps_url(loc, city_name)
-            return validated, issues + fixes
-        return itinerary, issues + fixes
-    except Exception as exc:
-        logger.warning("Plan validation failed: %s", exc)
-        return itinerary, [f"Validation skipped: {exc}"]
-
-
-# ---------------------------------------------------------------------------
-# CrewAI Task builders
-# ---------------------------------------------------------------------------
-
-def _build_tasks(
-    trip_data: Dict[str, Any],
-    agents: tuple,
-    on_progress: Optional[callable] = None,
-) -> list[Task]:
-    (
-        researcher_agent,
-        selector_agent,
-        flight_agent,
-        accommodation_agent,
-        planner_agent,
-    ) = agents
-
-    dest = trip_data["destination"]
-    origin = trip_data.get("origin_city", "New York")
-    start = trip_data["start_date"]
-    end = trip_data["end_date"]
-    travelers = trip_data.get("num_travelers", 1)
-    interests = ", ".join(trip_data.get("interests", [])) or "general sightseeing"
-    dietary = ", ".join(trip_data.get("dietary_restrictions", [])) or "none"
-    budget = trip_data.get("budget_level", "mid")
-    duration = _calc_duration(start, end)
-    is_country = _is_likely_country(dest)
-
-    def _make_callback(agent_name: str, done_msg: str):
-        def cb(output: Any):
-            if on_progress:
-                on_progress({
-                    "type": "progress",
-                    "agent": agent_name,
-                    "status": "done",
-                    "message": done_msg,
-                })
-        return cb
-
-    research_task = Task(
-        description=f"""Research the travel destination **{dest}** for a {duration}-day trip.
+    prompt = f"""Research the travel destination **{dest}** for a {duration}-day trip.
 
 Traveler interests: {interests}
 Budget level: {budget}
+{web_context}{city_data_context}
+IMPORTANT: Use SPECIFIC named places, restaurants, and attractions — never generic
+phrases like "local restaurant" or "popular attraction". If structured city data is
+provided above, incorporate those exact restaurant and attraction names.
 
-Provide a comprehensive JSON object with:
+Return a single JSON object with these keys:
 {{
-  "overview": "2-3 sentence overview of the destination",
-  "best_areas": ["area1", "area2"],
-  "top_attractions": ["attraction1", "attraction2", "..."],
-  "local_food": ["dish1", "dish2", "..."],
-  "transport_tips": "how to get around",
+  "overview": "2-3 sentence overview with specific highlights",
+  "best_areas": ["Specific Neighbourhood/District 1", "Specific Neighbourhood/District 2"],
+  "top_attractions": ["Specific Named Attraction 1", "Specific Named Attraction 2", ...],
+  "local_food": ["Specific Restaurant Name — signature dish", ...],
+  "transport_tips": "specific transport (metro line names, pass prices, etc.)",
   "safety_notes": "brief safety info",
-  "budget_tips": "money-saving tips"
+  "budget_tips": "specific money-saving tips with actual prices",
+  "cities": ["City1", "City2", ...]
 }}
 
-Return ONLY valid JSON, no markdown fences or extra text.""",
-        expected_output="A JSON object containing destination overview, best areas, top attractions, local food, transport tips, safety notes, and budget tips.",
-        agent=researcher_agent,
-        callback=_make_callback("DestinationResearcher", f"Research on {dest} complete"),
-    )
+{city_instruction}
 
-    if is_country:
-        city_description = f"""Based on the destination research provided in context, select the best cities
-to visit in **{dest}** for a {duration}-day trip.
+Return ONLY valid JSON."""
 
-Interests: {interests}
-Budget: {budget}
+    try:
+        raw = _llm_call(_RESEARCH_SYSTEM, prompt, temperature=0.5)
+        result = _safe_json_parse(raw)
+        cities = result.pop("cities", [dest])
+        if not isinstance(cities, list) or not cities:
+            cities = [dest]
+        cities = [str(c) for c in cities[:4]]
+        return result, cities
+    except Exception as exc:
+        logger.warning("Research LLM call failed: %s", exc)
+        defaults = {
+            "Japan": ["Tokyo", "Kyoto", "Osaka"],
+            "France": ["Paris", "Nice", "Lyon"],
+            "Italy": ["Rome", "Florence", "Venice"],
+            "Spain": ["Barcelona", "Madrid", "Seville"],
+            "Thailand": ["Bangkok", "Chiang Mai", "Phuket"],
+            "UK": ["London", "Edinburgh", "Bath"],
+            "USA": ["New York", "Los Angeles", "San Francisco"],
+            "Germany": ["Berlin", "Munich", "Hamburg"],
+        }
+        cities = defaults.get(dest, [dest]) if is_country else [dest]
+        research = {
+            "overview": f"A {duration}-day trip to {dest}.",
+            "best_areas": [],
+            "top_attractions": [],
+            "local_food": [],
+            "transport_tips": "",
+            "safety_notes": "",
+            "budget_tips": "",
+        }
+        return research, cities
 
-Rules:
-- Select 2-4 cities (minimum 2 days each)
-- Order them in a logical route (minimize backtracking)
-- Include the most popular city
 
-Return ONLY a valid JSON array: ["City1", "City2", "City3"]"""
-    else:
-        city_description = f"""The destination is **{dest}** which is a single city, not a country.
-Return a JSON array with just this city: ["{dest}"]"""
+# ---------------------------------------------------------------------------
+# Step 4: Itinerary Generation (1 LLM call)
+#
+# This receives the actual flight times + hotel names/locations as context
+# so it can plan Day 1 around arrival, cluster activities near hotels, etc.
+# ---------------------------------------------------------------------------
 
-    city_task = Task(
-        description=city_description,
-        expected_output="A JSON array of city names to visit.",
-        agent=selector_agent,
-        context=[research_task],
-        callback=_make_callback("CitySelector", f"Cities selected for {dest}"),
-    )
+_ITINERARY_SYSTEM = """\
+You are an expert itinerary designer, local food critic, and city logistics \
+planner. Your TOP PRIORITY is geographic efficiency: group activities by \
+neighbourhood so travellers walk between consecutive stops. You ALWAYS \
+recommend places by name (e.g. 'Ichiran Ramen Shibuya', 'Le Bouillon Chartier'). \
+You never use generic phrases like 'find a local restaurant'. You include a \
+Google Maps URL for every single location. Always respond with valid JSON only."""
 
-    flight_task = Task(
-        description=f"""Find flights for this trip using the Search Flights tool.
 
-Trip details:
-- Departure date: {start}
-- Return date: {end}
-- Number of travelers: {travelers}
-- Origin: {origin}
+def _normalise_itinerary_items(itinerary: list[dict], dest: str) -> None:
+    """Normalise item fields in-place (shared by generate / validate / modify)."""
+    for day in itinerary:
+        city_name = day.get("city", dest)
+        for i, item in enumerate(day.get("items", [])):
+            item.setdefault("id", f"day{day.get('day_number', 0)}_item{i}")
+            item.setdefault("status", "planned")
+            item.setdefault("delayed_to_day", None)
+            item.setdefault("is_ai_suggested", 1)
+            if "cost_usd" not in item:
+                raw_cost = item.pop("cost", 0)
+                item["cost_usd"] = raw_cost if isinstance(raw_cost, (int, float)) else 0
+            item.setdefault("cost_local", f"${item['cost_usd']}")
+            item.setdefault("currency", "USD")
+            item["cost"] = item["cost_usd"]
+            if not item.get("google_maps_url"):
+                loc = item.get("location", item.get("title", city_name))
+                item["google_maps_url"] = _gmaps_url(loc, city_name)
 
-Using the cities selected in the context, call the Search Flights tool ONCE with
-FLAT keyword arguments (NOT an array, NOT a list):
-  origin="{origin}"
-  destination=<first city from context>
-  departure_date="{start}"
-  return_date="{end}"
-  num_travelers={travelers}
 
-After the tool returns results, your final output MUST be a valid JSON object:
-{{
-  "origin": "{origin}",
-  "destination_city": "<first city from context>",
-  "departure_date": "{start}",
-  "return_date": "{end}",
-  "num_travelers": {travelers}
-}}
+def _generate_itinerary(
+    dest: str, cities: list[str], duration: int, start: str, end: str,
+    travelers: int, interests: str, dietary: str, budget: str,
+    research: dict, flights: list[dict], accommodations: list[dict],
+) -> list[dict]:
+    """Generate the day-by-day itinerary in a single LLM call.
 
-Return ONLY valid JSON.""",
-        expected_output="A JSON object with flight search parameters used.",
-        agent=flight_agent,
-        context=[city_task],
-        callback=_make_callback("FlightFinder", "Flight search complete"),
-    )
+    The prompt includes flight arrival/departure times and hotel locations
+    so the LLM can coordinate the itinerary around them.
+    """
+    # Build compact context from research + flights + hotels + city neighbourhoods
+    research_summary = json.dumps(research, default=str)[:2000]
+    city_neighbourhood_data = _gather_city_data(cities)
+    flight_summary = json.dumps(flights[:5], default=str)[:1500]
+    accom_summary = json.dumps([
+        {"city": a.get("city"), "name": a.get("name"),
+         "address": a.get("address"), "price_per_night": a.get("price_per_night")}
+        for a in accommodations[:6]
+    ], default=str)[:1500]
 
-    accommodation_task = Task(
-        description=f"""Find accommodations for each city using the Search Accommodations tool.
+    prompt = f"""Create a {duration}-day itinerary for {dest} ({start} to {end}).
+Cities to visit: {json.dumps(cities)}
 
-Trip dates: {start} to {end}
-Number of guests: {travelers}
-Budget level: {budget}
+DESTINATION RESEARCH:
+{research_summary}
 
-For each city from context, call Search Accommodations with:
-  city=<city name>, check_in_date="{start}", check_out_date="{end}", num_guests={travelers}
+CITY NEIGHBOURHOOD DATA — you MUST pick restaurants and attractions from this data.
+Each neighbourhood lists specific restaurants, cafes, and attractions that are
+geographically close together. Plan each day around ONE or TWO adjacent neighbourhoods:
+{city_neighbourhood_data}
 
-IMPORTANT: After calling the tool, pick the BEST option for the budget level and include
-the hotel details in your output. Your output MUST be a valid JSON object:
-{{
-  "accommodations": [
-    {{
-      "city": "<city name>",
-      "hotel_name": "<name of chosen hotel>",
-      "address": "<hotel address or neighbourhood>",
-      "price_per_night": <number>,
-      "neighbourhood": "<district/area the hotel is in>"
-    }}
-  ]
-}}
+FLIGHTS (use arrival/departure times to plan Day 1 and last day):
+{flight_summary}
 
-Return ONLY valid JSON.""",
-        expected_output="A JSON object with accommodation details including hotel name, address, and neighbourhood for each city.",
-        agent=accommodation_agent,
-        context=[city_task, research_task],
-        callback=_make_callback("AccommodationFinder", "Accommodation search complete"),
-    )
-
-    itinerary_task = Task(
-        description=f"""Create a {duration}-day itinerary for {dest} ({start} to {end}).
-
-Context from previous agents: destination research (including neighbourhood layout with
-attractions grouped by district), selected cities, flights, and accommodations (including
-hotel name and neighbourhood for each city).
+ACCOMMODATIONS (plan activities near these hotels):
+{accom_summary}
 
 Travelers: {travelers} | Interests: {interests} | Diet: {dietary} | Budget: {budget}
 
-PLANNING APPROACH:
-- First, note the HOTEL NAME and NEIGHBOURHOOD from the accommodation context for each city.
-- Use the "neighbourhoods" data from city research to understand which attractions and
-  restaurants are in the SAME district.
-- Plan each day by picking ONE or TWO adjacent neighbourhoods and filling the day with
-  activities, meals, and sights from those areas.
-- Use the Get City Information tool for any city to see its neighbourhood breakdown.
-
 CRITICAL RULES:
-1. **GEOGRAPHIC PROXIMITY** — This is the MOST IMPORTANT rule. Within each day, order
-   activities so consecutive stops are CLOSE TOGETHER. Cluster by neighbourhood:
-   - Start each day at or very near the accommodation.
-   - Pick breakfast within WALKING DISTANCE of the hotel (< 1 km).
-   - Group morning activities in the SAME neighbourhood. Pick lunch near those sights.
-   - Group afternoon activities in a SINGLE nearby area. Pick dinner near that area or
-     back near the hotel.
-   - NEVER jump across the city between consecutive items (e.g. don't go from a hotel
-     in Shinjuku to a café in Asakusa and back to Shibuya).
-   - Add the specific neighbourhood/district in each "location" field so proximity is
-     verifiable (e.g. "Café de Flore, Saint-Germain-des-Prés, Paris").
-2. **Name every restaurant/cafe/food stall specifically** — NEVER say "find a local restaurant"
-   or "try local food". Always give the real name (e.g. "Ichiran Ramen Shibuya", "Pizzeria Da
-   Michele", "Cafe de Flore").
-3. **Google Maps link for EVERY location** — format: https://www.google.com/maps/search/PLACE+NAME+CITY
-4. **Prices in local currency + USD** — e.g. "cost_local": "¥1500", "cost_usd": 10.
-   Use realistic local prices. A bowl of ramen in Tokyo is ~¥1000-1500 ($7-10), NOT $2000.
-5. Each day: 5-7 items including breakfast, lunch, dinner (all named specifically).
-6. Day 1 = arrival, last day = departure. Distribute cities evenly.
+1. **USE THE NEIGHBOURHOOD DATA ABOVE** — For each day, pick ONE or TWO adjacent
+   neighbourhoods from the CITY NEIGHBOURHOOD DATA and fill the day with restaurants
+   and attractions listed there. Start near the hotel, breakfast at a restaurant from
+   the nearest neighbourhood, group morning activities in the same area, lunch from
+   the same neighbourhood's restaurant list, afternoon in one adjacent neighbourhood,
+   dinner from that area. Include the neighbourhood name in each "location" field.
+2. **Coordinate with flights** — Day 1: plan activities AFTER the flight arrives.
+   Last day: plan departure activities BEFORE the return flight. Don't schedule a
+   full day of sightseeing on arrival day if the flight lands in the evening.
+3. **Coordinate with hotels** — Plan breakfast near the hotel each morning. Choose
+   attractions and restaurants in the same district as the hotel when possible.
+4. **Name every restaurant/cafe specifically** — NEVER say "find a local restaurant".
+   Always give the real name.
+5. **Google Maps link for EVERY location** — format: https://www.google.com/maps/search/PLACE+NAME+CITY
+6. **Prices in local currency + USD** — use realistic local prices.
+7. Each day: 5-7 items including breakfast, lunch, dinner (all named specifically).
+8. Distribute cities evenly across {duration} days.
 
 Return a JSON array:
 [
@@ -985,14 +803,79 @@ Return a JSON array:
   }}
 ]
 
-Return ONLY valid JSON.""",
-        expected_output="A JSON array of day objects with specific named locations, Google Maps URLs, and local currency prices.",
-        agent=planner_agent,
-        context=[research_task, city_task, flight_task, accommodation_task],
-        callback=_make_callback("ItineraryPlanner", "Itinerary planning complete"),
-    )
+Return ONLY valid JSON."""
 
-    return [research_task, city_task, flight_task, accommodation_task, itinerary_task]
+    try:
+        raw = _llm_call(_ITINERARY_SYSTEM, prompt, temperature=0.7)
+        parsed = _safe_json_parse(raw)
+        if isinstance(parsed, list) and len(parsed) > 0:
+            _normalise_itinerary_items(parsed, dest)
+            return parsed
+    except Exception as exc:
+        logger.warning("Itinerary LLM call failed: %s", exc)
+
+    return []  # caller will use fallback
+
+
+# ---------------------------------------------------------------------------
+# Step 5: Validation (1 LLM call)
+# ---------------------------------------------------------------------------
+
+_VALIDATOR_SYSTEM = """\
+You are a meticulous travel plan reviewer. You catch mistakes: restaurants at \
+3 AM, museums on closed days, jumping across the city between items, 12 hours \
+of back-to-back activities, unrealistic costs. You fix issues while preserving \
+the plan's spirit. Always respond with valid JSON only."""
+
+
+def _validate_and_fix_itinerary(
+    itinerary: list[dict], dest: str, duration: int,
+) -> tuple[list[dict], list[str]]:
+    """Validate and fix the itinerary with a single LLM call."""
+    if not itinerary:
+        return itinerary, []
+
+    itin_json = json.dumps(itinerary, indent=2, default=str)
+
+    prompt = f"""Review this {duration}-day itinerary for {dest} and fix any issues.
+
+--- ITINERARY ---
+{itin_json}
+--- END ---
+
+CHECK FOR:
+1. **Geographic coherence**: Are consecutive items in the same neighbourhood?
+2. **Timing feasibility**: Realistic start times? Enough travel time between items?
+3. **Cost realism**: Realistic prices for the destination?
+4. **Meal coverage**: Breakfast, lunch, dinner at named restaurants each day?
+5. **Activity density**: No more than 7-8 items per day.
+6. **Google Maps URLs**: Every item should have a google_maps_url.
+
+Return a JSON object:
+{{
+  "issues_found": ["issue 1", ...],
+  "fixes_applied": ["fix 1", ...],
+  "validated_itinerary": [ <the full itinerary — fixed if needed, unchanged if fine> ]
+}}
+
+If perfect, return empty arrays and the itinerary unchanged.
+Return ONLY valid JSON."""
+
+    try:
+        raw = _llm_call(_VALIDATOR_SYSTEM, prompt, temperature=0.3)
+        result = _safe_json_parse(raw)
+
+        issues = result.get("issues_found", [])
+        fixes = result.get("fixes_applied", [])
+        validated = result.get("validated_itinerary", itinerary)
+
+        if isinstance(validated, list) and len(validated) > 0:
+            _normalise_itinerary_items(validated, dest)
+            return validated, issues + fixes
+        return itinerary, issues + fixes
+    except Exception as exc:
+        logger.warning("Plan validation failed: %s", exc)
+        return itinerary, [f"Validation skipped: {exc}"]
 
 
 # ---------------------------------------------------------------------------
@@ -1000,27 +883,18 @@ Return ONLY valid JSON.""",
 # ---------------------------------------------------------------------------
 
 def _auto_select_best(flights: list[dict], accommodations: list[dict]) -> None:
-    """Mark the best flight per type and best accommodation per city as 'selected'.
-
-    For flights: pick the cheapest option per flight_type (outbound, return).
-    For accommodations: pick the highest-rated (then cheapest) per city.
-    All others stay 'suggested'.
-    """
-    # --- Flights: cheapest per type ---
+    """Mark the best flight per type and best accommodation per city as 'selected'."""
     by_type: dict[str, list[dict]] = {}
     for f in flights:
         ft = f.get("flight_type", "outbound")
         by_type.setdefault(ft, []).append(f)
 
     for ft, group in by_type.items():
-        # Reset all to suggested first
         for f in group:
             f["status"] = "suggested"
-        # Pick cheapest
         best = min(group, key=lambda f: f.get("price", float("inf")))
         best["status"] = "selected"
 
-    # --- Accommodations: highest rated (then cheapest) per city ---
     by_city: dict[str, list[dict]] = {}
     for a in accommodations:
         city = a.get("city", "unknown")
@@ -1029,7 +903,6 @@ def _auto_select_best(flights: list[dict], accommodations: list[dict]) -> None:
     for city, group in by_city.items():
         for a in group:
             a["status"] = "suggested"
-        # Sort by rating desc (None → 0), then price asc
         best = min(
             group,
             key=lambda a: (-(a.get("rating") or 0), a.get("total_price", float("inf"))),
@@ -1038,161 +911,14 @@ def _auto_select_best(flights: list[dict], accommodations: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Result parser
+# Route enrichment
 # ---------------------------------------------------------------------------
-
-def _parse_crew_result(
-    tasks: list[Task],
-    trip_data: Dict[str, Any],
-) -> Dict[str, Any]:
-    dest = trip_data["destination"]
-    start = trip_data["start_date"]
-    end = trip_data["end_date"]
-    travelers = trip_data.get("num_travelers", 1)
-    duration = _calc_duration(start, end)
-    is_country = _is_likely_country(dest)
-
-    research_task, city_task, flight_task, accommodation_task, itinerary_task = tasks
-
-    # --- Parse cities ---
-    cities = [dest]
-    try:
-        city_raw = city_task.output.raw if city_task.output else "[]"
-        parsed_cities = _safe_json_parse(city_raw)
-        if isinstance(parsed_cities, list) and len(parsed_cities) > 0:
-            cities = [str(c) for c in parsed_cities[:4]]
-    except Exception:
-        if is_country:
-            defaults = {
-                "Japan": ["Tokyo", "Kyoto", "Osaka"],
-                "France": ["Paris", "Nice", "Lyon"],
-                "Italy": ["Rome", "Florence", "Venice"],
-                "Spain": ["Barcelona", "Madrid", "Seville"],
-                "Thailand": ["Bangkok", "Chiang Mai", "Phuket"],
-                "UK": ["London", "Edinburgh", "Bath"],
-                "USA": ["New York", "Los Angeles", "San Francisco"],
-                "Germany": ["Berlin", "Munich", "Hamburg"],
-            }
-            cities = defaults.get(dest, [f"{dest} City"])
-
-    # --- Flights: reuse cached results from agent tool calls, fallback to API ---
-    origin = trip_data.get("origin_city", "New York")
-    flight_cache_key = f"flights|{origin.strip().lower()}|{cities[0].strip().lower()}|{start}|{end}|{travelers}"
-    with _cache_lock:
-        cached_flights = _flight_cache.get(flight_cache_key)
-    if cached_flights:
-        flights = cached_flights
-    else:
-        # Cache miss — call API as fallback
-        origin_code = _airport_code(origin)
-        dest_code = _airport_code(cities[0])
-        raw_flights = _amadeus_flights_fn(origin_code, dest_code, start, end, travelers)
-        if not raw_flights or (isinstance(raw_flights, list) and raw_flights and "error" in raw_flights[0]):
-            flights = generate_mock_flights(origin, cities[0], start, end, travelers)
-        elif _is_mock_flight(raw_flights[0]):
-            flights = raw_flights
-        else:
-            flights = _normalize_amadeus_flights(raw_flights, origin, cities[0])
-            if not flights:
-                flights = generate_mock_flights(origin, cities[0], start, end, travelers)
-
-    # --- Accommodations: reuse cached results, parallel multi-city fallback ---
-    def _fetch_city_hotels(city: str) -> list[dict]:
-        hotel_cache_key = f"hotels|{city.strip().lower()}|{start}|{end}|{travelers}"
-        with _cache_lock:
-            cached = _hotel_cache.get(hotel_cache_key)
-        if cached:
-            return cached[:3]
-        city_code = _city_iata(city)
-        raw_hotels = _amadeus_hotels_fn(city_code, start, end, travelers, "hotel")
-        if not raw_hotels or (isinstance(raw_hotels, list) and raw_hotels and "error" in raw_hotels[0]):
-            return generate_mock_accommodations(city, start, end, travelers)[:3]
-        elif _is_mock_accom(raw_hotels[0]):
-            return raw_hotels[:3]
-        else:
-            hotels = _normalize_amadeus_hotels(raw_hotels, city, start, end)[:3]
-            return hotels if hotels else generate_mock_accommodations(city, start, end, travelers)[:3]
-
-    accommodations: list[dict] = []
-    with ThreadPoolExecutor(max_workers=max(len(cities), 1)) as pool:
-        futures = {pool.submit(_fetch_city_hotels, city): city for city in cities}
-        for future in as_completed(futures):
-            accommodations.extend(future.result())
-
-    # --- Parse itinerary ---
-    itinerary: list[dict] = []
-    try:
-        itin_raw = itinerary_task.output.raw if itinerary_task.output else "[]"
-        parsed_itin = _safe_json_parse(itin_raw)
-        if isinstance(parsed_itin, list) and len(parsed_itin) > 0:
-            itinerary = parsed_itin
-            for day in itinerary:
-                city_name = day.get("city", dest)
-                for i, item in enumerate(day.get("items", [])):
-                    item.setdefault("id", f"day{day.get('day_number', 0)}_item{i}")
-                    item.setdefault("status", "planned")
-                    item.setdefault("delayed_to_day", None)
-                    item.setdefault("is_ai_suggested", 1)
-
-                    # Normalise cost fields
-                    if "cost_usd" not in item:
-                        raw_cost = item.pop("cost", 0)
-                        item["cost_usd"] = raw_cost if isinstance(raw_cost, (int, float)) else 0
-                    item.setdefault("cost_local", f"${item['cost_usd']}")
-                    item.setdefault("currency", "USD")
-                    # Keep legacy 'cost' key pointing to USD for DB compat
-                    item["cost"] = item["cost_usd"]
-
-                    # Ensure Google Maps link
-                    if not item.get("google_maps_url"):
-                        loc = item.get("location", item.get("title", city_name))
-                        item["google_maps_url"] = _gmaps_url(loc, city_name)
-    except Exception:
-        pass
-
-    if not itinerary:
-        itinerary = _build_fallback_itinerary(cities, duration, start)
-
-    # --- Validate and fix the itinerary (self-reflection) ---
-    validation_notes: list[str] = []
-    try:
-        itinerary, validation_notes = _validate_and_fix_itinerary(itinerary, dest, duration)
-    except Exception as exc:
-        logger.warning("Validator failed, using unvalidated itinerary: %s", exc)
-
-    # --- Auto-select best flight per type and best accommodation per city ---
-    _auto_select_best(flights, accommodations)
-
-    # --- Compute travel routes between consecutive items per day ---
-    _enrich_itinerary_with_routes(itinerary)
-
-    summary = f"Planned {duration} days across {', '.join(cities)}"
-    if validation_notes:
-        summary += f" (validated: {len(validation_notes)} checks)"
-
-    return {
-        "cities": cities,
-        "flights": flights,
-        "accommodations": accommodations,
-        "itinerary": itinerary,
-        "is_country_level": is_country,
-        "planning_summary": summary,
-        "validation_notes": validation_notes,
-    }
-
 
 def _enrich_itinerary_with_routes(
     itinerary: list[dict],
     travel_prefs: dict | None = None,
 ) -> None:
-    """Add travel_info to each item in the itinerary (in-place).
-
-    Uses Google Maps Distance Matrix API (or mock fallback) to compute
-    walking and transit times between consecutive items within each day.
-
-    *travel_prefs*: optional ``{"avoid": [...], "prefer": [...]}`` with
-    mode tokens like ``"walking"`` / ``"transit"``.
-    """
+    """Add travel_info to each item in the itinerary (in-place)."""
     for day in itinerary:
         city = day.get("city", "")
         items = day.get("items", [])
@@ -1208,8 +934,12 @@ def _enrich_itinerary_with_routes(
             items[0].setdefault("travel_info", {})
 
 
+# ---------------------------------------------------------------------------
+# Fallback itinerary builder
+# ---------------------------------------------------------------------------
+
 def _build_fallback_itinerary(
-    cities: list[str], duration: int, start_date: str
+    cities: list[str], duration: int, start_date: str,
 ) -> list[dict]:
     n = len(cities)
     base = duration // max(n, 1)
@@ -1246,231 +976,279 @@ def _build_fallback_itinerary(
 # ---------------------------------------------------------------------------
 
 class TripPlanner:
-    """High-level wrapper around the CrewAI planning crew."""
+    """High-level wrapper — direct litellm calls, no CrewAI overhead.
+
+    Total LLM calls per plan_trip:
+      1. Research + city selection  (1 call)
+      2. Flights search             (0 calls — direct API)
+      3. Hotels search              (0 calls — direct API)
+      4. Itinerary generation       (1 call)
+      5. Validation                 (1 call)
+    = 3 LLM round-trips vs ~25 with CrewAI
+    """
 
     @staticmethod
     def plan_trip(trip_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Run the planning crew in three phases, parallelising independent agents.
+        """Run the full planning pipeline."""
+        dest = trip_data["destination"]
+        origin = trip_data.get("origin_city", "New York")
+        start = trip_data["start_date"]
+        end = trip_data["end_date"]
+        travelers = trip_data.get("num_travelers", 1)
+        interests = ", ".join(trip_data.get("interests", [])) or "general sightseeing"
+        dietary = ", ".join(trip_data.get("dietary_restrictions", [])) or "none"
+        budget = trip_data.get("budget_level", "mid")
+        duration = _calc_duration(start, end)
+        is_country = _is_likely_country(dest)
 
-        Phase 1 (serial): DestinationResearcher → CitySelector
-        Phase 2 (parallel): FlightFinder ‖ AccommodationFinder
-        Phase 3 (serial): ItineraryPlanner (needs phases 1+2 context)
-        """
-        agents = _build_agents()
-        tasks = _build_tasks(trip_data, agents)
-        (
-            research_agent, city_agent,
-            flight_agent, accommodation_agent,
-            planner_agent,
-        ) = agents
-        research_task, city_task, flight_task, accommodation_task, itinerary_task = tasks
-
-        # --- Phase 1: Research + City Selection (sequential) ---
-        phase1_crew = Crew(
-            agents=[research_agent, city_agent],
-            tasks=[research_task, city_task],
-            process=Process.sequential,
-            verbose=VERBOSE,
-            tracing=TRACING,
+        # --- Step 1: Research + City Selection (1 LLM call) ---
+        research, cities = _research_and_select_cities(
+            dest, duration, interests, budget, is_country,
         )
-        phase1_crew.kickoff()
 
-        # --- Phase 2: Flights ‖ Accommodations (parallel via threads) ---
-        def _run_mini_crew(agent, task):
-            mini = Crew(
-                agents=[agent],
-                tasks=[task],
-                process=Process.sequential,
-                verbose=VERBOSE,
-                tracing=TRACING,
+        # --- Step 2 & 3: Flights + Hotels (parallel, NO LLM calls) ---
+        flights: list[dict] = []
+        accommodations: list[dict] = []
+
+        with ThreadPoolExecutor(max_workers=max(len(cities) + 1, 2)) as pool:
+            flight_future = pool.submit(
+                _search_flights_direct, origin, cities[0], start, end, travelers,
             )
-            mini.kickoff()
+            hotel_futures = {
+                pool.submit(_search_hotels_direct, city, start, end, travelers): city
+                for city in cities
+            }
+            flights = flight_future.result()
+            for future in as_completed(hotel_futures):
+                accommodations.extend(future.result()[:3])
 
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            f_flight = pool.submit(_run_mini_crew, flight_agent, flight_task)
-            f_accom = pool.submit(_run_mini_crew, accommodation_agent, accommodation_task)
-            f_flight.result()
-            f_accom.result()
-
-        # --- Phase 3: Itinerary (needs all prior context) ---
-        phase3_crew = Crew(
-            agents=[planner_agent],
-            tasks=[itinerary_task],
-            process=Process.sequential,
-            verbose=VERBOSE,
-            tracing=TRACING,
+        # --- Step 4: Itinerary (1 LLM call — receives flights + hotels context) ---
+        itinerary = _generate_itinerary(
+            dest, cities, duration, start, end, travelers,
+            interests, dietary, budget, research, flights, accommodations,
         )
-        phase3_crew.kickoff()
+        if not itinerary:
+            itinerary = _build_fallback_itinerary(cities, duration, start)
 
-        return _parse_crew_result(tasks, trip_data)
+        # --- Step 5: Validate (1 LLM call) ---
+        validation_notes: list[str] = []
+        try:
+            itinerary, validation_notes = _validate_and_fix_itinerary(
+                itinerary, dest, duration,
+            )
+        except Exception as exc:
+            logger.warning("Validator failed: %s", exc)
 
-    @staticmethod
-    def plan_trip_stream(trip_data: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
-        """Generator that yields SSE progress events while running a 3-phase crew."""
-        import time as _time
+        # --- Post-processing ---
+        _auto_select_best(flights, accommodations)
+        _enrich_itinerary_with_routes(itinerary)
 
-        agent_start_messages = {
-            "DestinationResearcher": f"Researching {trip_data['destination']}...",
-            "CitySelector": f"Selecting cities in {trip_data['destination']}...",
-            "FlightFinder": "Searching for flights via Amadeus...",
-            "AccommodationFinder": "Finding accommodations via Amadeus...",
-            "ItineraryPlanner": "Building your day-by-day itinerary...",
+        summary = f"Planned {duration} days across {', '.join(cities)}"
+        if validation_notes:
+            summary += f" (validated: {len(validation_notes)} checks)"
+
+        return {
+            "cities": cities,
+            "flights": flights,
+            "accommodations": accommodations,
+            "itinerary": itinerary,
+            "is_country_level": is_country,
+            "planning_summary": summary,
+            "validation_notes": validation_notes,
         }
 
-        progress_events: list[dict] = []
+    @staticmethod
+    def plan_trip_stream(
+        trip_data: Dict[str, Any],
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Generator that yields SSE progress events while planning."""
+        import time as _time
 
-        def on_progress(event: dict):
-            progress_events.append(event)
+        dest = trip_data["destination"]
+        origin = trip_data.get("origin_city", "New York")
+        start = trip_data["start_date"]
+        end = trip_data["end_date"]
+        travelers = trip_data.get("num_travelers", 1)
+        interests = ", ".join(trip_data.get("interests", [])) or "general sightseeing"
+        dietary = ", ".join(trip_data.get("dietary_restrictions", [])) or "none"
+        budget = trip_data.get("budget_level", "mid")
+        duration = _calc_duration(start, end)
+        is_country = _is_likely_country(dest)
 
-        def _drain_events(started):
-            while progress_events:
-                event = progress_events.pop(0)
-                agent_name = event.get("agent", "")
-                if agent_name not in started:
-                    started.add(agent_name)
-                    yield {
-                        "type": "progress",
-                        "agent": agent_name,
-                        "status": "running",
-                        "message": agent_start_messages.get(agent_name, f"{agent_name} working..."),
-                    }
-                yield event
-
-        agents = _build_agents()
-        tasks = _build_tasks(trip_data, agents, on_progress=on_progress)
-        (
-            research_agent, city_agent,
-            flight_agent, accommodation_agent,
-            planner_agent,
-        ) = agents
-        research_task, city_task, flight_task, accommodation_task, itinerary_task = tasks
-
-        started_agents: set = set()
-        result_holder: dict = {"done": False, "error": None}
-
-        # --- Phase 1: Research + City Selection (background thread) ---
+        # --- Step 1: Research + City Selection ---
         yield {
             "type": "progress", "agent": "DestinationResearcher",
             "status": "running",
-            "message": agent_start_messages["DestinationResearcher"],
+            "message": f"Researching {dest}...",
         }
-        started_agents.add("DestinationResearcher")
 
-        def run_phase1():
+        result_holder: dict = {}
+        error_holder: list = []
+
+        def _run_research():
             try:
-                phase1 = Crew(
-                    agents=[research_agent, city_agent],
-                    tasks=[research_task, city_task],
-                    process=Process.sequential, verbose=VERBOSE,
+                r, c = _research_and_select_cities(
+                    dest, duration, interests, budget, is_country,
                 )
-                phase1.kickoff()
-                result_holder["done"] = True
+                result_holder["research"] = r
+                result_holder["cities"] = c
             except Exception as exc:
-                result_holder["error"] = exc
-                result_holder["done"] = True
+                error_holder.append(exc)
 
-        thread = threading.Thread(target=run_phase1, daemon=True)
+        thread = threading.Thread(target=_run_research, daemon=True)
         thread.start()
+        while thread.is_alive():
+            _time.sleep(0.2)
 
-        while not result_holder["done"]:
-            yield from _drain_events(started_agents)
-            _time.sleep(0.3)
-        yield from _drain_events(started_agents)
-
-        if result_holder.get("error"):
+        if error_holder:
             yield {"type": "error", "agent": "Orchestrator", "status": "error",
-                   "message": str(result_holder["error"])}
+                   "message": str(error_holder[0])}
             return
 
-        # --- Phase 2: Flights ‖ Accommodations (parallel, background) ---
+        research = result_holder["research"]
+        cities = result_holder["cities"]
+
+        yield {
+            "type": "progress", "agent": "DestinationResearcher",
+            "status": "done",
+            "message": f"Research on {dest} complete",
+        }
+        yield {
+            "type": "progress", "agent": "CitySelector",
+            "status": "done",
+            "message": f"Cities selected: {', '.join(cities)}",
+        }
+
+        # --- Step 2 & 3: Flights + Hotels (parallel, no LLM) ---
         yield {
             "type": "progress", "agent": "FlightFinder",
             "status": "running",
-            "message": agent_start_messages["FlightFinder"],
+            "message": "Searching for flights via Amadeus...",
         }
         yield {
             "type": "progress", "agent": "AccommodationFinder",
             "status": "running",
-            "message": agent_start_messages["AccommodationFinder"],
+            "message": "Finding accommodations via Amadeus...",
         }
-        started_agents.update(["FlightFinder", "AccommodationFinder"])
 
-        result_holder = {"done": False, "error": None}
+        flights: list[dict] = []
+        accommodations: list[dict] = []
 
-        def run_phase2():
+        def _run_search():
+            nonlocal flights, accommodations
             try:
-                def _mini(agent, task):
-                    Crew(agents=[agent], tasks=[task],
-                         process=Process.sequential, verbose=VERBOSE).kickoff()
-                with ThreadPoolExecutor(max_workers=2) as pool:
-                    f1 = pool.submit(_mini, flight_agent, flight_task)
-                    f2 = pool.submit(_mini, accommodation_agent, accommodation_task)
-                    f1.result()
-                    f2.result()
-                result_holder["done"] = True
+                with ThreadPoolExecutor(max_workers=max(len(cities) + 1, 2)) as pool:
+                    flight_future = pool.submit(
+                        _search_flights_direct, origin, cities[0], start, end, travelers,
+                    )
+                    hotel_futures = {
+                        pool.submit(_search_hotels_direct, city, start, end, travelers): city
+                        for city in cities
+                    }
+                    flights = flight_future.result()
+                    for future in as_completed(hotel_futures):
+                        accommodations.extend(future.result()[:3])
             except Exception as exc:
-                result_holder["error"] = exc
-                result_holder["done"] = True
+                error_holder.append(exc)
 
-        thread = threading.Thread(target=run_phase2, daemon=True)
+        error_holder.clear()
+        thread = threading.Thread(target=_run_search, daemon=True)
         thread.start()
+        while thread.is_alive():
+            _time.sleep(0.2)
 
-        while not result_holder["done"]:
-            yield from _drain_events(started_agents)
-            _time.sleep(0.3)
-        yield from _drain_events(started_agents)
-
-        if result_holder.get("error"):
+        if error_holder:
             yield {"type": "error", "agent": "Orchestrator", "status": "error",
-                   "message": str(result_holder["error"])}
+                   "message": str(error_holder[0])}
             return
 
-        # --- Phase 3: Itinerary (background) ---
+        yield {
+            "type": "progress", "agent": "FlightFinder",
+            "status": "done",
+            "message": "Flight search complete",
+        }
+        yield {
+            "type": "progress", "agent": "AccommodationFinder",
+            "status": "done",
+            "message": "Accommodation search complete",
+        }
+
+        # --- Step 4: Itinerary (1 LLM call) ---
         yield {
             "type": "progress", "agent": "ItineraryPlanner",
             "status": "running",
-            "message": agent_start_messages["ItineraryPlanner"],
+            "message": "Building your day-by-day itinerary...",
         }
-        started_agents.add("ItineraryPlanner")
 
-        result_holder = {"done": False, "error": None}
+        itinerary: list[dict] = []
 
-        def run_phase3():
+        def _run_itinerary():
+            nonlocal itinerary
             try:
-                Crew(agents=[planner_agent], tasks=[itinerary_task],
-                     process=Process.sequential, verbose=VERBOSE).kickoff()
-                result_holder["done"] = True
+                itinerary = _generate_itinerary(
+                    dest, cities, duration, start, end, travelers,
+                    interests, dietary, budget, research, flights, accommodations,
+                )
             except Exception as exc:
-                result_holder["error"] = exc
-                result_holder["done"] = True
+                error_holder.append(exc)
 
-        thread = threading.Thread(target=run_phase3, daemon=True)
+        error_holder.clear()
+        thread = threading.Thread(target=_run_itinerary, daemon=True)
         thread.start()
+        while thread.is_alive():
+            _time.sleep(0.2)
 
-        while not result_holder["done"]:
-            yield from _drain_events(started_agents)
-            _time.sleep(0.3)
-        yield from _drain_events(started_agents)
-
-        if result_holder.get("error"):
+        if error_holder:
             yield {"type": "error", "agent": "Orchestrator", "status": "error",
-                   "message": str(result_holder["error"])}
+                   "message": str(error_holder[0])}
             return
 
-        # --- Phase 4: Validation (runs inside _parse_crew_result) ---
+        if not itinerary:
+            itinerary = _build_fallback_itinerary(cities, duration, start)
+
+        yield {
+            "type": "progress", "agent": "ItineraryPlanner",
+            "status": "done",
+            "message": "Itinerary planning complete",
+        }
+
+        # --- Step 5: Validation ---
         yield {
             "type": "progress", "agent": "PlanValidator",
             "status": "running",
             "message": "Validating itinerary for geographic coherence and timing...",
         }
-        started_agents.add("PlanValidator")
 
-        plan_data = _parse_crew_result(tasks, trip_data)
+        validation_notes: list[str] = []
+        try:
+            itinerary, validation_notes = _validate_and_fix_itinerary(
+                itinerary, dest, duration,
+            )
+        except Exception as exc:
+            logger.warning("Validator failed: %s", exc)
 
         yield {
             "type": "progress", "agent": "PlanValidator",
             "status": "done",
-            "message": f"Validation complete — {len(plan_data.get('validation_notes', []))} checks performed",
+            "message": f"Validation complete — {len(validation_notes)} checks performed",
+        }
+
+        # --- Post-processing ---
+        _auto_select_best(flights, accommodations)
+        _enrich_itinerary_with_routes(itinerary)
+
+        summary = f"Planned {duration} days across {', '.join(cities)}"
+        if validation_notes:
+            summary += f" (validated: {len(validation_notes)} checks)"
+
+        plan_data = {
+            "cities": cities,
+            "flights": flights,
+            "accommodations": accommodations,
+            "itinerary": itinerary,
+            "is_country_level": is_country,
+            "planning_summary": summary,
+            "validation_notes": validation_notes,
         }
 
         yield {
@@ -1479,7 +1257,7 @@ class TripPlanner:
             "status": "complete",
             "message": "Trip planning complete!",
             "plan": plan_data,
-            "validation_notes": plan_data.get("validation_notes", []),
+            "validation_notes": validation_notes,
         }
 
     @staticmethod
@@ -1489,12 +1267,9 @@ class TripPlanner:
         user_message: str,
         chat_history: list[dict] | None = None,
     ) -> Dict[str, Any]:
-        """Use a single LLM agent to modify the itinerary based on a user chat message.
+        """Modify the itinerary based on a user chat message (1 LLM call).
 
         Returns {"itinerary": [...], "reply": "...", "travel_prefs": {...}}
-        where *reply* is a short natural-language confirmation of the changes
-        made and *travel_prefs* captures any travel-mode constraints that were
-        inferred from the user's message.
         """
         dest = trip_data["destination"]
         start = trip_data["start_date"]
@@ -1503,53 +1278,45 @@ class TripPlanner:
         interests = ", ".join(trip_data.get("interests", [])) or "general sightseeing"
         budget = trip_data.get("budget_level", "mid")
 
-        # Serialise the current itinerary so the agent can see it
         itin_json = json.dumps(current_itinerary, indent=2, default=str)
 
-        # Build conversation history context for multi-turn coherence
+        # Gather neighbourhood data for cities in the itinerary
+        itin_cities = list({day.get("city", dest) for day in current_itinerary if day.get("city")})
+        city_data_for_modify = _gather_city_data(itin_cities or [dest])
+
+        # Web search for current conditions if the message suggests real-time needs
+        modify_web_results = ""
+        if any(kw in user_message.lower() for kw in
+               ("weather", "rain", "storm", "closed", "cancel", "strike", "event", "festival")):
+            web_hits = _web_search(f"{dest} {user_message} current", max_results=3)
+            if web_hits:
+                modify_web_results = f"\n--- CURRENT WEB INFO ---\n{web_hits}\n--- END WEB INFO ---\n"
+
         history_context = ""
         if chat_history:
             history_lines = []
-            for msg in chat_history[-10:]:  # last 10 messages for context
+            for msg in chat_history[-10:]:
                 role = msg.get("role", "user").upper()
                 content = msg.get("content", "")
                 history_lines.append(f"{role}: {content}")
             history_context = "\n--- CONVERSATION HISTORY ---\n" + "\n".join(history_lines) + "\n--- END HISTORY ---\n\n"
 
-        modifier_tools = [get_city_info_tool]
-        modifier_tools.extend(_web_search_tools)
+        system_prompt = """\
+You are an expert travel planner who adapts itineraries to real-world changes: \
+weather, cancellations, new wishes, schedule conflicts. You know specific \
+restaurants, attractions, and alternatives. When the user says it's raining you \
+swap outdoor activities for museums. You always name exact places and include \
+Google Maps URLs. You are also aware that the itinerary includes recommended \
+travel routes between stops (walking / transit). When the user mentions conditions \
+that affect HOW they travel — rain, transit strikes, wanting a walking day — \
+reflect that in the travel_prefs field. Always respond with valid JSON only."""
 
-        modifier_agent = Agent(
-            role="Itinerary Modification Specialist",
-            goal=(
-                "Modify an existing travel itinerary based on a user's natural-language "
-                "request. Preserve as much of the original plan as possible while making "
-                "the requested changes. Always use SPECIFIC named places (never generic)."
-            ),
-            backstory=(
-                "You are an expert travel planner who adapts itineraries to real-world "
-                "changes: weather, cancellations, new wishes, and schedule conflicts. "
-                "You know specific restaurants, attractions, and alternatives in every "
-                "major city. When the user says it's raining you swap outdoor activities "
-                "for museums, galleries, or covered markets. When transport is disrupted "
-                "you reroute. You always name exact places and include Google Maps URLs.\n\n"
-                "You are also aware that the itinerary includes recommended travel routes "
-                "between stops (walking / transit).  When the user mentions conditions "
-                "that affect HOW they travel — rain (avoid walking), train/metro strike "
-                "(avoid transit), wanting a walking day (prefer walking) — you MUST "
-                "reflect that in the travel_prefs field of your output so that route "
-                "recommendations can be recalculated."
-            ),
-            tools=modifier_tools,
-            llm=_llm_name(),
-            verbose=VERBOSE,
-            allow_delegation=False,
-            max_iter=10,
-        )
-
-        modify_task = Task(
-            description=f"""You are modifying an existing {duration}-day itinerary for {dest}
+        user_prompt = f"""You are modifying an existing {duration}-day itinerary for {dest}
 ({start} to {end}).  Interests: {interests}. Budget: {budget}.
+{modify_web_results}
+--- CITY DATA (use these specific restaurants/attractions as alternatives) ---
+{city_data_for_modify}
+--- END CITY DATA ---
 
 {history_context}--- CURRENT ITINERARY (JSON) ---
 {itin_json}
@@ -1559,60 +1326,32 @@ THE USER SAYS:
 \"{user_message}\"
 
 INSTRUCTIONS:
-1. Understand what the user wants changed.  Examples:
-   - Weather change → replace outdoor activities with indoor alternatives for that day.
-   - Transport cancellation → adjust travel/transport items, find alternatives.
-   - Flight cancelled → note the issue, suggest rebooking or alternative travel.
-   - "I want to visit X" → insert it into the best day, shifting other items as needed.
-   - "I want to visit X on day N" → place it on that specific day.
+1. Understand what the user wants changed.
 2. Keep UNCHANGED days exactly as they are — copy them verbatim.
-3. For CHANGED days, keep as many original items as possible and only swap/add/remove
-   what the user requested.
-4. Every location MUST have a google_maps_url in the format:
-   https://www.google.com/maps/search/PLACE+NAME+CITY
+3. For CHANGED days, keep as many original items as possible.
+4. Every location MUST have a google_maps_url.
 5. Name every restaurant/cafe specifically — never say "find a local restaurant".
 6. Include cost_usd, cost_local, currency for every item.
 
 TRAVEL PREFERENCE DETECTION:
-If the user's message implies a constraint on how they move between locations,
-include a "travel_prefs" object in your response.  Recognised mode keywords:
-"walking" and "transit".
-
-Examples:
+If the message implies a travel-mode constraint, include "travel_prefs":
 - "It's raining"        → {{"avoid": ["walking"], "prefer": ["transit"]}}
 - "Trains are cancelled" → {{"avoid": ["transit"], "prefer": ["walking"]}}
-- "Metro strike"         → {{"avoid": ["transit"], "prefer": ["walking"]}}
-- "I want a walking day" → {{"avoid": [], "prefer": ["walking"]}}
-- "Let's use the metro"  → {{"avoid": [], "prefer": ["transit"]}}
+- No travel implications → {{"avoid": [], "prefer": []}}
 
-If the message has NO travel-mode implications, set "travel_prefs" to {{}}.
-
-Return a JSON object with THREE keys:
+Return a JSON object:
 {{
-  "reply": "A short 1-3 sentence confirmation of what you changed (plain English).",
+  "reply": "Short 1-3 sentence confirmation of changes.",
   "travel_prefs": {{"avoid": [...], "prefer": [...]}},
-  "itinerary": [ <the full modified itinerary array, same schema as the input> ]
+  "itinerary": [ <full modified itinerary> ]
 }}
 
-Return ONLY valid JSON, no markdown fences or extra text.""",
-            expected_output="A JSON object with 'reply', 'travel_prefs', and 'itinerary' keys.",
-            agent=modifier_agent,
-        )
+Return ONLY valid JSON."""
 
-        crew = Crew(
-            agents=[modifier_agent],
-            tasks=[modify_task],
-            process=Process.sequential,
-            verbose=VERBOSE,
-        )
-        crew.kickoff()
-
-        # Parse the result
-        raw = modify_task.output.raw if modify_task.output else "{}"
         try:
+            raw = _llm_call(system_prompt, user_prompt, temperature=0.7)
             result = _safe_json_parse(raw)
         except Exception:
-            # Last-resort: return original itinerary with an error reply
             return {
                 "itinerary": current_itinerary,
                 "reply": "Sorry, I couldn't understand how to modify the itinerary. Please try rephrasing your request.",
@@ -1623,38 +1362,70 @@ Return ONLY valid JSON, no markdown fences or extra text.""",
         reply = result.get("reply", "Itinerary updated.")
         travel_prefs = result.get("travel_prefs") or {}
 
-        # Validate travel_prefs shape
         if not isinstance(travel_prefs, dict):
             travel_prefs = {}
         for key in ("avoid", "prefer"):
             if key not in travel_prefs or not isinstance(travel_prefs[key], list):
                 travel_prefs.setdefault(key, [])
 
-        # Ensure every item has required fields
-        for day in new_itinerary:
-            city_name = day.get("city", dest)
-            for i, item in enumerate(day.get("items", [])):
-                item.setdefault("id", f"day{day.get('day_number', 0)}_item{i}")
-                item.setdefault("status", "planned")
-                item.setdefault("delayed_to_day", None)
-                item.setdefault("is_ai_suggested", 1)
-                if "cost_usd" not in item:
-                    raw_cost = item.pop("cost", 0)
-                    item["cost_usd"] = raw_cost if isinstance(raw_cost, (int, float)) else 0
-                item.setdefault("cost_local", f"${item['cost_usd']}")
-                item.setdefault("currency", "USD")
-                item["cost"] = item["cost_usd"]
-                if not item.get("google_maps_url"):
-                    loc = item.get("location", item.get("title", city_name))
-                    item["google_maps_url"] = _gmaps_url(loc, city_name)
-
-        # Enrich with travel routes (respecting any detected travel preferences)
+        _normalise_itinerary_items(new_itinerary, dest)
         _enrich_itinerary_with_routes(new_itinerary, travel_prefs)
 
         return {
             "itinerary": new_itinerary,
             "reply": reply,
             "travel_prefs": travel_prefs,
+        }
+
+    @staticmethod
+    def regenerate_itinerary(
+        trip_data: Dict[str, Any],
+        plan_data: Dict[str, Any],
+        flights: list[dict],
+        accommodations: list[dict],
+    ) -> Dict[str, Any]:
+        """Re-run only the itinerary generation using cached context.
+
+        Called by the /regenerate-itinerary endpoint to avoid re-running
+        the full pipeline (research, flights, hotels).  Still only 2 LLM
+        calls: itinerary generation + validation.
+        """
+        dest = trip_data["destination"]
+        start = trip_data["start_date"]
+        end = trip_data["end_date"]
+        travelers = trip_data.get("num_travelers", 1)
+        interests = ", ".join(trip_data.get("interests", [])) or "general sightseeing"
+        dietary = ", ".join(trip_data.get("dietary_restrictions", [])) or "none"
+        budget = trip_data.get("budget_level", "mid")
+        duration = _calc_duration(start, end)
+
+        cities = plan_data.get("cities", [dest])
+        research = {
+            "overview": plan_data.get("planning_summary", ""),
+            "top_attractions": [],
+            "local_food": [],
+        }
+
+        itinerary = _generate_itinerary(
+            dest, cities, duration, start, end, travelers,
+            interests, dietary, budget, research, flights, accommodations,
+        )
+        if not itinerary:
+            itinerary = _build_fallback_itinerary(cities, duration, start)
+
+        validation_notes: list[str] = []
+        try:
+            itinerary, validation_notes = _validate_and_fix_itinerary(
+                itinerary, dest, duration,
+            )
+        except Exception as exc:
+            logger.warning("Validator failed: %s", exc)
+
+        _enrich_itinerary_with_routes(itinerary)
+
+        return {
+            "itinerary": itinerary,
+            "validation_notes": validation_notes,
         }
 
     @staticmethod

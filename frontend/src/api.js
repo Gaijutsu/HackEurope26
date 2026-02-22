@@ -309,6 +309,24 @@ export async function getChatHistory(tripId, userId) {
   return apiFetch(`/trips/${tripId}/chat/history?user_id=${encodeURIComponent(userId)}`)
 }
 
+// ── Payment Splitting ─────────────────────────────────────────────────────
+
+export async function createSplitPayments(tripId, userId, { itemType, itemId, payerNames, payerEmails }) {
+  return apiFetch(`/trips/${tripId}/splits/create?user_id=${encodeURIComponent(userId)}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      item_type: itemType,
+      item_id: itemId,
+      payer_names: payerNames,
+      payer_emails: payerEmails,
+    }),
+  })
+}
+
+export async function getSplitPayments(tripId, userId) {
+  return apiFetch(`/trips/${tripId}/splits?user_id=${encodeURIComponent(userId)}`)
+}
+
 // ── Booking verification ──────────────────────────────────────────────────
 
 export async function verifyBooking(tripId, itemType, itemId, sessionId, userId) {

@@ -9,8 +9,11 @@ sqlalchemy>=2.0.25
 # Data validation
 pydantic>=2.5.3
 
-# CrewAI (Multi-agent orchestration)
-crewai[tools]>=0.95.0
+# LLM orchestration (direct calls, no framework overhead)
+litellm>=1.30.0
+
+# CrewAI tools only (web search / scrape — used by travel guide if API keys present)
+crewai-tools>=0.17.0
 
 # Amadeus flight & hotel API
 amadeus>=9.0.0
