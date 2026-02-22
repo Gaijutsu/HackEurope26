@@ -6,11 +6,32 @@ import './ItineraryMap.css'
 // Simple in-memory geocoding cache (survives day switches)
 const geocodeCache = new Map()
 
+function extractPlaceName(location) {
+  // Take the first comma-separated segment (strips neighbourhood/city suffixes)
+  let name = location.split(',')[0].trim()
+  // "From X to Y" transit patterns — use the destination place
+  const toMatch = name.match(/\bto\s+(.+)$/i)
+  if (toMatch) name = toMatch[1].trim()
+  // Strip parenthetical district tags like "(1er)", "(8e)", "(transfer from ...)"
+  name = name.replace(/\s*\([^)]*\)/g, '').trim()
+  // Slash-separated alternatives (e.g. "Arc de Triomphe / Champs-Élysées") — keep first
+  name = name.split(/\s*\/\s*/)[0].trim()
+  return name
+}
+
 async function geocodeLocation(location, destination) {
   const cacheKey = `${location}::${destination}`
   if (geocodeCache.has(cacheKey)) return geocodeCache.get(cacheKey)
 
-  const queries = [`${location}, ${destination}`, location]
+  const placeName = extractPlaceName(location)
+  // Build a deduplicated list of queries from most-specific to least-specific
+  const seen = new Set()
+  const queries = [
+    `${placeName}, ${destination}`,
+    `${location}, ${destination}`,
+    location,
+  ].filter((q) => { if (seen.has(q)) return false; seen.add(q); return true })
+
   for (const q of queries) {
     try {
       const res = await fetch(
@@ -28,7 +49,7 @@ async function geocodeLocation(location, destination) {
     }
   }
 
-  geocodeCache.set(cacheKey, null)
+  // Don't cache failures — allow retries on next page load
   return null
 }
 
