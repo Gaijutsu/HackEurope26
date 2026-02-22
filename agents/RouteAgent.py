@@ -182,21 +182,43 @@ def _mock_route(origin: str, destination: str) -> Dict[str, Any]:
 # Core public API
 # ---------------------------------------------------------------------------
 
-def _pick_recommendation(walking: dict, transit: dict) -> tuple[str, str]:
+def _pick_recommendation(
+    walking: dict,
+    transit: dict,
+    travel_prefs: Optional[Dict[str, List[str]]] = None,
+) -> tuple[str, str]:
     """Choose the better mode and build a user-friendly display string.
+
+    *travel_prefs* may contain:
+        {"avoid": ["walking"], "prefer": ["transit"]}  — or vice-versa.
+    Recognised mode tokens: "walking", "transit".
 
     Returns (recommended_mode, display_string).
     """
+    prefs = travel_prefs or {}
+    avoid = {m.lower() for m in prefs.get("avoid", [])}
+    prefer = {m.lower() for m in prefs.get("prefer", [])}
+
     walk_secs = walking.get("duration_value", 9999)
     transit_secs = transit.get("duration_value", 9999)
     walk_mins = max(1, walk_secs // 60)
     transit_mins = max(1, transit_secs // 60)
+    transit_label = transit.get("transit_name", "transit")
 
-    # Walking is nice when it's ≤ 15 min or faster than transit
+    # --- preference overrides ---------------------------------------------------
+    if "walking" in avoid and "transit" not in avoid:
+        return "transit", f"🚇 Transit {transit_mins} min ({transit_label})"
+    if "transit" in avoid and "walking" not in avoid:
+        return "walking", f"🚶 Walk {walk_mins} min"
+    if "walking" in prefer:
+        return "walking", f"🚶 Walk {walk_mins} min"
+    if "transit" in prefer:
+        return "transit", f"🚇 Transit {transit_mins} min ({transit_label})"
+
+    # --- default heuristic (no overrides) ----------------------------------------
     if walk_mins <= 15 or walk_secs <= transit_secs:
         return "walking", f"🚶 Walk {walk_mins} min"
     else:
-        transit_label = transit.get("transit_name", "transit")
         return "transit", f"🚇 Transit {transit_mins} min ({transit_label})"
 
 
@@ -204,8 +226,12 @@ def get_route(
     origin: str,
     destination: str,
     city: str = "",
+    travel_prefs: Optional[Dict[str, List[str]]] = None,
 ) -> Dict[str, Any]:
     """Get walking + transit route info between two locations.
+
+    *travel_prefs*: optional {"avoid": [...], "prefer": [...]} with mode
+    tokens like "walking" / "transit".  Passed to ``_pick_recommendation``.
 
     Tries Google Maps API first, falls back to mock data.
     Returns a dict suitable for storing in itinerary item travel_info:
@@ -235,7 +261,7 @@ def get_route(
             log.debug("Transit API miss for %s → %s, using mock", origin, destination)
             transit = mock["transit"]
 
-    rec, display = _pick_recommendation(walking, transit)
+    rec, display = _pick_recommendation(walking, transit, travel_prefs)
     return {
         "walking": walking,
         "transit": transit,
@@ -247,6 +273,7 @@ def get_route(
 def compute_routes_for_day(
     items: List[Dict[str, Any]],
     city: str = "",
+    travel_prefs: Optional[Dict[str, List[str]]] = None,
 ) -> List[Dict[str, Any]]:
     """Enrich a day's itinerary items with travel_info between consecutive items.
 
@@ -257,6 +284,7 @@ def compute_routes_for_day(
     Args:
         items: list of itinerary item dicts (must have 'location' or 'title')
         city: city name for disambiguation
+        travel_prefs: optional {"avoid": [...], "prefer": [...]} mode prefs
 
     Returns:
         The same list, mutated in-place (and returned for convenience).
@@ -278,7 +306,7 @@ def compute_routes_for_day(
     if pairs:
         with ThreadPoolExecutor(max_workers=min(len(pairs), 6)) as pool:
             futures = {
-                pool.submit(get_route, orig, dest, city): idx
+                pool.submit(get_route, orig, dest, city, travel_prefs): idx
                 for idx, orig, dest in pairs
             }
             for future in as_completed(futures):

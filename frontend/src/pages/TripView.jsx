@@ -34,12 +34,16 @@ function StatusTag({ status }) {
   return <span className={`itin-item__tag ${c.cls}`}>{c.label}</span>
 }
 
-function TravelRoute({ travelInfo }) {
+function TravelRoute({ travelInfo, travelPrefs }) {
   if (!travelInfo || !travelInfo.display) return null
 
   const walking = travelInfo.walking || {}
   const transit = travelInfo.transit || {}
   const recommended = travelInfo.recommended || 'walking'
+  const avoid = (travelPrefs?.avoid || []).map((m) => m.toLowerCase())
+
+  const walkAvoided = avoid.includes('walking')
+  const transitAvoided = avoid.includes('transit')
 
   return (
     <div className="travel-route">
@@ -52,13 +56,15 @@ function TravelRoute({ travelInfo }) {
 
         {/* Secondary option (the non-recommended one) */}
         {recommended === 'walking' && transit.duration_text && (
-          <span className="travel-route__badge travel-route__badge--alt">
+          <span className={`travel-route__badge travel-route__badge--alt${transitAvoided ? ' travel-route__badge--avoided' : ''}`}>
             🚇 {transit.duration_text} ({transit.transit_name || 'transit'})
+            {transitAvoided && ' ⚠️'}
           </span>
         )}
         {recommended === 'transit' && walking.duration_text && (
-          <span className="travel-route__badge travel-route__badge--alt">
+          <span className={`travel-route__badge travel-route__badge--alt${walkAvoided ? ' travel-route__badge--avoided' : ''}`}>
             🚶 {walking.duration_text}
+            {walkAvoided && ' ⚠️'}
           </span>
         )}
 
@@ -84,6 +90,7 @@ export default function TripView() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [chatLoading, setChatLoading] = useState(false)
+  const [travelPrefs, setTravelPrefs] = useState(null)
 
   useEffect(() => {
     loadData()
@@ -143,6 +150,10 @@ export default function TripView() {
       setChatLoading(true)
       try {
         const result = await api.chatModifyItinerary(tripId, user.id, message)
+        // Capture travel preferences returned by the AI
+        if (result.travel_prefs && (result.travel_prefs.avoid?.length || result.travel_prefs.prefer?.length)) {
+          setTravelPrefs(result.travel_prefs)
+        }
         // Reload itinerary to reflect changes
         const itinData = await api.getItinerary(tripId, user.id)
         setDays(itinData.days || [])
@@ -207,6 +218,29 @@ export default function TripView() {
             ))}
           </div>
 
+          {/* Active travel preference banner */}
+          {travelPrefs && (travelPrefs.avoid?.length > 0 || travelPrefs.prefer?.length > 0) && (
+            <div className="travel-prefs-banner">
+              <span className="travel-prefs-banner__icon">🔀</span>
+              <span className="travel-prefs-banner__text">
+                Routes adjusted
+                {travelPrefs.avoid?.length > 0 && (
+                  <> — avoiding <strong>{travelPrefs.avoid.join(', ')}</strong></>
+                )}
+                {travelPrefs.prefer?.length > 0 && (
+                  <> — preferring <strong>{travelPrefs.prefer.join(', ')}</strong></>
+                )}
+              </span>
+              <button
+                className="travel-prefs-banner__clear"
+                onClick={() => setTravelPrefs(null)}
+                title="Clear travel preferences"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           {/* Two-column body: itinerary left, map right */}
           <div className="trip-view__body">
             {/* Left: items list */}
@@ -229,7 +263,7 @@ export default function TripView() {
                     >
                       {/* Travel route badge between items */}
                       {i > 0 && item.travel_info && item.travel_info.display && (
-                        <TravelRoute travelInfo={item.travel_info} />
+                        <TravelRoute travelInfo={item.travel_info} travelPrefs={travelPrefs} />
                       )}
 
                       <div className="itin-item">
