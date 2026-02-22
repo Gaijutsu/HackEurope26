@@ -66,15 +66,6 @@ export default function Accommodations() {
     }
   }
 
-  if (loading) {
-    return (
-      <div className="accom-page">
-        <TripNav />
-        <div className="accom-page__loading">Loading accommodations...</div>
-      </div>
-    )
-  }
-
   return (
     <motion.div
       className="accom-page"
@@ -91,7 +82,7 @@ export default function Accommodations() {
 
       {error && <div className="accom-page__error">{error}</div>}
 
-      {accommodations.length === 0 ? (
+      {!loading && accommodations.length === 0 ? (
         <div className="accom-page__empty">
           <p>No accommodations found. Start planning to generate options.</p>
         </div>

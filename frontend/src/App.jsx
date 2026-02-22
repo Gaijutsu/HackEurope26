@@ -14,6 +14,13 @@ import Flights from './pages/Flights'
 import Accommodations from './pages/Accommodations'
 import './App.css'
 
+// Group trip sub-routes under one key so tab switches are instant (no exit→enter animation)
+function getRouteKey(pathname) {
+  const tripMatch = pathname.match(/^\/trips\/[^/]+/)
+  if (tripMatch) return tripMatch[0]
+  return pathname
+}
+
 function App() {
   const location = useLocation()
   const { isAuthenticated } = useAuth()
@@ -25,7 +32,7 @@ function App() {
     <>
       {!hideNavbar && isAuthenticated && <Navbar />}
       <AnimatePresence mode="wait">
-        <Routes location={location} key={location.pathname}>
+        <Routes location={location} key={getRouteKey(location.pathname)}>
           {/* Public routes */}
           <Route path="/" element={<Landing />} />
           <Route path="/plan" element={<PlanForm />} />

@@ -98,15 +98,6 @@ export default function TripView() {
   const currentDay = days.find((d) => d.day_number === selectedDay)
   const items = currentDay?.items || []
 
-  if (loading) {
-    return (
-      <div className="trip-view">
-        <TripNav />
-        <div className="trip-view__loading">Loading itinerary...</div>
-      </div>
-    )
-  }
-
   return (
     <motion.div
       className="trip-view"
@@ -138,7 +129,7 @@ export default function TripView() {
 
       {error && <div className="trip-view__error">{error}</div>}
 
-      {days.length === 0 ? (
+      {!loading && days.length === 0 ? (
         <div className="trip-view__empty">
           <p>No itinerary items yet. Start planning first!</p>
         </div>

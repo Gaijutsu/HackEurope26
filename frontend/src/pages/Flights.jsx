@@ -81,15 +81,6 @@ export default function Flights() {
   const outbound = flights.filter((f) => f.flight_type === 'outbound')
   const returnFlights = flights.filter((f) => f.flight_type === 'return')
 
-  if (loading) {
-    return (
-      <div className="flights-page">
-        <TripNav />
-        <div className="flights-page__loading">Loading flights...</div>
-      </div>
-    )
-  }
-
   return (
     <motion.div
       className="flights-page"
@@ -106,7 +97,7 @@ export default function Flights() {
 
       {error && <div className="flights-page__error">{error}</div>}
 
-      {flights.length === 0 ? (
+      {!loading && flights.length === 0 ? (
         <div className="flights-page__empty">
           <p>No flights found. Start planning to generate flight options.</p>
         </div>
