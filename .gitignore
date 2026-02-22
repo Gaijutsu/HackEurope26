@@ -218,3 +218,5 @@ frontend/public/pinterest/*
 
 # Runtime logs
 nohup.out
+
+trip_planner.db
