@@ -28,7 +28,7 @@ SAMPLE_TRIP = {
     "num_travelers": 2,
     "interests": ["Culture", "Food"],
     "dietary_restrictions": ["vegetarian"],
-    "budget_level": "mid",
+    "budget_level": 1000,
 }
 
 COUNTRY_TRIP = {**SAMPLE_TRIP, "destination": "Japan"}

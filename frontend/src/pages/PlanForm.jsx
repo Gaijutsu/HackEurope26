@@ -22,11 +22,6 @@ const INTEREST_OPTIONS = [
     'Shopping', 'Adventure', 'Relaxation', 'Photography'
 ]
 
-const BUDGET_LEVELS = [
-    { value: 'budget', label: 'Budget', desc: '$50–150/day' },
-    { value: 'mid', label: 'Mid-Range', desc: '$150–300/day' },
-    { value: 'luxury', label: 'Luxury', desc: '$300+/day' },
-]
 
 const pageVariants = {
     initial: { opacity: 0, y: 40 },
@@ -77,7 +72,7 @@ export default function PlanForm() {
         originCity: '',
         startDate: '',
         endDate: '',
-        budget: 'mid',
+        budget: 1000,
         accommodation: '',
         foodRequirements: '',
         travelers: '1',
@@ -165,7 +160,7 @@ export default function PlanForm() {
                 num_travelers: parseInt(form.travelers) || 1,
                 interests: [...form.interests, form.vibe].filter(Boolean),
                 dietary_restrictions: dietaryRestrictions,
-                budget_level: form.budget,
+                budget_level: parseInt(form.budget) || 1000,
             }
 
             const result = await api.createTrip(user.id, tripData)
@@ -319,22 +314,20 @@ export default function PlanForm() {
                         <div className="plan__row">
                             <div className="plan__field">
                                 <div className="plan__label-row">
-                                    <label className="plan__label">Budget level</label>
+                                    <label htmlFor="budget" className="plan__label">Total budget (USD)</label>
                                     <span className="plan__required-tag">required</span>
                                 </div>
-                                <div className="plan__chips">
-                                    {BUDGET_LEVELS.map((level) => (
-                                        <button
-                                            key={level.value}
-                                            type="button"
-                                            className={`plan__chip ${form.budget === level.value ? 'plan__chip--active' : ''}`}
-                                            onClick={() => setForm((prev) => ({ ...prev, budget: level.value }))}
-                                        >
-                                            <span>{level.label}</span>
-                                            <span className="plan__chip-desc">{level.desc}</span>
-                                        </button>
-                                    ))}
-                                </div>
+                                <input
+                                    id="budget"
+                                    type="number"
+                                    name="budget"
+                                    className="plan__input"
+                                    min="0"
+                                    step="1"
+                                    value={form.budget}
+                                    onChange={handleChange}
+                                    placeholder="e.g. 2000"
+                                />
                             </div>
                             <div className="plan__field">
                                 <label htmlFor="travelers" className="plan__label">Travelers</label>

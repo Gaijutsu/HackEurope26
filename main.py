@@ -83,7 +83,7 @@ class TripCreate(BaseModel):
     num_travelers: int = 1
     interests: List[str] = []
     dietary_restrictions: List[str] = []
-    budget_level: str = "mid"  # budget, mid, luxury
+    budget_level: int = 1000  # total trip budget in USD
 
 class TripResponse(BaseModel):
     id: str

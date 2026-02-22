@@ -685,7 +685,7 @@ def _build_tasks(
     travelers = trip_data.get("num_travelers", 1)
     interests = ", ".join(trip_data.get("interests", [])) or "general sightseeing"
     dietary = ", ".join(trip_data.get("dietary_restrictions", [])) or "none"
-    budget = trip_data.get("budget_level", "mid")
+    budget = f"${trip_data.get('budget_level', 1000):,} total"
     duration = _calc_duration(start, end)
     is_country = _is_likely_country(dest)
 
@@ -1283,7 +1283,7 @@ class TripPlanner:
         end = trip_data["end_date"]
         duration = _calc_duration(start, end)
         interests = ", ".join(trip_data.get("interests", [])) or "general sightseeing"
-        budget = trip_data.get("budget_level", "mid")
+        budget = f"${trip_data.get('budget_level', 1000):,} total"
 
         # Serialise the current itinerary so the agent can see it
         itin_json = json.dumps(current_itinerary, indent=2, default=str)

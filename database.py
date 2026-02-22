@@ -40,7 +40,7 @@ class Trip(Base):
     num_travelers = Column(Integer, default=1)
     interests = Column(JSON, default=list)  # ['culture', 'food', 'nature']
     dietary_restrictions = Column(JSON, default=list)
-    budget_level = Column(String, default='mid')  # budget, mid, luxury
+    budget_level = Column(Integer, default=1000)  # total trip budget in USD
     planning_status = Column(String, default='pending')  # pending, in_progress, completed, failed
     plan_data = Column(JSON, default=dict)  # Store the complete AI-generated plan
     created_at = Column(DateTime, default=datetime.utcnow)
