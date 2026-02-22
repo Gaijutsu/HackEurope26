@@ -64,8 +64,11 @@ export default function PlanForm() {
 
     const destination = searchParams.get('destination') || 'Your destination'
     const moodId = searchParams.get('mood') || '1'
+    const imageUrl = searchParams.get('image')
     const mood = MOOD_DATA[moodId] || MOOD_DATA[1]
     const initialVibe = searchParams.get('vibe') || ''
+
+    const displayImage = imageUrl || mood.image
 
     const today = new Date().toISOString().split('T')[0]
 
@@ -212,7 +215,7 @@ export default function PlanForm() {
             {/* Header with mood context */}
             <motion.header className="plan__header" variants={itemVariants}>
                 <div className="plan__mood-preview">
-                    <img src={mood.image} alt={mood.title} className="plan__mood-image" />
+                    <img src={displayImage} alt={mood.title} className="plan__mood-image" />
                     <div className="plan__mood-info">
                         <span className="plan__mood-badge">{mood.vibe}</span>
                         <h1 className="plan__title">

@@ -146,11 +146,19 @@ export default function Landing() {
 
         const params = new URLSearchParams({ destination })
         if (vibe) params.set('vibe', vibe)
+
+        const selectedImage = upvotedCards.length > 0 ? upvotedCards[0].image : (moodBoards.length > 0 ? moodBoards[0].image : null)
+        if (selectedImage) params.set('image', selectedImage)
+
         navigate(`/plan?${params.toString()}`)
     }
 
     const handleSkipToNext = () => {
-        navigate(`/plan?destination=${encodeURIComponent(destination)}`)
+        const params = new URLSearchParams({ destination })
+        const upvotedCards = getUpvotedCards()
+        const selectedImage = upvotedCards.length > 0 ? upvotedCards[0].image : (moodBoards.length > 0 ? moodBoards[0].image : null)
+        if (selectedImage) params.set('image', selectedImage)
+        navigate(`/plan?${params.toString()}`)
     }
 
     const hasVotes = Object.values(votes).some((v) => v !== 'neither')
