@@ -458,7 +458,7 @@ def _save_plan_to_db(db, trip, plan_data: dict):
             price=flight["price"],
             currency=flight.get("currency", "USD"),
             booking_url=flight["booking_url"],
-            status="suggested",
+            status=flight.get("status", "suggested"),
         ))
 
     for acc in plan_data.get("accommodations", []):
@@ -476,7 +476,7 @@ def _save_plan_to_db(db, trip, plan_data: dict):
             rating=acc.get("rating"),
             amenities=acc.get("amenities", []),
             booking_url=acc["booking_url"],
-            status="suggested",
+            status=acc.get("status", "suggested"),
         ))
 
     for day in plan_data.get("itinerary", []):
@@ -1418,7 +1418,7 @@ def get_disruptions(trip_id: str, user_id: str):
     }
 
 
-# ── Travel guide generator (Claude 200K context) ──────────────────────────
+# ── Travel guide generator (CrewAI agent crew with web search) ─────────────
 
 class TravelGuideRequest(BaseModel):
     sections: List[str] = []  # optional: override which sections to generate
@@ -1426,10 +1426,12 @@ class TravelGuideRequest(BaseModel):
 
 @app.post("/trips/{trip_id}/travel-guide")
 def generate_travel_guide(trip_id: str, user_id: str, body: TravelGuideRequest = None):
-    """Generate a comprehensive travel guide using the full trip plan context.
-    
-    Leverages Claude's 200K context window to produce a rich guide including
-    cultural tips, phrasebook, packing list, emergency contacts, and more.
+    """Generate a comprehensive travel guide using a CrewAI agent crew with Tavily web search.
+
+    Two agents collaborate:
+    1. TravelResearcher — searches the web for up-to-date local info (transit apps,
+       payment methods, tipping culture, visa requirements, safety, etc.)
+    2. GuideWriter — synthesises everything into a polished Markdown travel guide.
     """
     db = get_db()
     trip = db.query(Trip).filter(Trip.id == trip_id, Trip.user_id == user_id).first()
@@ -1449,25 +1451,108 @@ def generate_travel_guide(trip_id: str, user_id: str, body: TravelGuideRequest =
         for f in flights
     ], indent=2)
 
-    accommodations = db.query(Accommodation).filter(Accommodation.trip_id == trip_id).all()
+    accommodations_db = db.query(Accommodation).filter(Accommodation.trip_id == trip_id).all()
     accom_info = json.dumps([
         {"name": a.name, "city": a.city, "address": a.address,
          "check_in": a.check_in_date, "check_out": a.check_out_date, "status": a.status}
-        for a in accommodations
+        for a in accommodations_db
     ], indent=2)
 
-    prompt = f"""You are an expert travel guide writer. Generate a comprehensive, beautifully
-formatted travel guide for this trip. Use the COMPLETE trip plan data below.
+    origin = trip.plan_data.get("origin_city", trip.origin_city or "")
+
+    # --- Build CrewAI agent crew ---
+    from crewai import Agent as CrewAgent, Crew as CrewCrew, Process as CrewProcess, Task as CrewTask
+
+    llm_model = planning_agent._llm_name()
+
+    # Web search tools (Tavily preferred, Serper fallback)
+    search_tools = list(planning_agent._web_search_tools)
+    if planning_agent._scrape_tool:
+        search_tools.append(planning_agent._scrape_tool)
+
+    researcher = CrewAgent(
+        role="Travel Research Specialist",
+        goal=(
+            f"Research up-to-date, practical travel information for visiting "
+            f"{trip.destination} from {origin or 'abroad'}. Focus on what a real "
+            f"traveller needs to know BEFORE and DURING their trip."
+        ),
+        backstory=(
+            "You are a meticulous travel researcher who finds the most current, practical "
+            "information for travellers. You search the web for real, verified details — "
+            "not generic advice. You focus on local apps, payment methods, transit cards, "
+            "tipping norms, visa/entry requirements, safety alerts, and cultural etiquette "
+            "that tourists often miss."
+        ),
+        tools=search_tools,
+        llm=llm_model,
+        verbose=False,
+        allow_delegation=False,
+        max_iter=8,
+    )
+
+    writer = CrewAgent(
+        role="Travel Guide Writer",
+        goal=(
+            f"Write a comprehensive, beautifully formatted Markdown travel guide for a "
+            f"{trip.budget_level}-budget trip to {trip.destination} "
+            f"({trip.start_date} to {trip.end_date})."
+        ),
+        backstory=(
+            "You are an award-winning travel writer who creates guides that are both "
+            "informative and a joy to read. You weave practical tips with cultural insight, "
+            "always cite specific names (apps, transit cards, restaurants), and format "
+            "everything in clean Markdown with emoji section headers."
+        ),
+        tools=[],
+        llm=llm_model,
+        verbose=False,
+        allow_delegation=False,
+        max_iter=5,
+    )
+
+    research_task = CrewTask(
+        description=f"""Research the following topics for a trip to {trip.destination}
+(from {origin or 'abroad'}, dates {trip.start_date} to {trip.end_date}).
+
+Search the web for CURRENT, SPECIFIC information on each topic:
+
+1. **Visa & Entry**: Do travellers from the origin country need a visa? Any e-visa or
+   visa-on-arrival options? Required documents? COVID/health requirements?
+2. **Local Transit Apps**: What apps should travellers install BEFORE arriving?
+   (e.g. metro apps, ride-hailing like Grab/Bolt/Uber, bike-share, train booking apps)
+3. **Payment & Money**: How do locals pay? Is cash or card dominant? Contactless?
+   Best cards to use? Where to exchange money? ATM tips? Apple/Google Pay acceptance?
+4. **Tipping Culture**: What is expected? Restaurants, taxis, hotels, tours?
+   Is it offensive or expected? Typical percentages.
+5. **Local SIM / Connectivity**: Best tourist SIM cards or eSIM providers?
+   Cost? Where to buy? WiFi availability.
+6. **Safety & Scams**: Current safety situation, common tourist scams,
+   areas to avoid, emergency numbers.
+7. **Cultural Etiquette**: Dress codes, religious site rules, greeting customs,
+   table manners, photography rules, common faux pas.
+8. **Language Basics**: What language(s) spoken? English proficiency level?
+   Essential phrases for tourists.
+
+Return your findings as a detailed report with all specific names, prices, and links.""",
+        expected_output="A detailed research report with specific, current travel information.",
+        agent=researcher,
+    )
+
+    guide_task = CrewTask(
+        description=f"""Using the research from the Travel Research Specialist AND the trip
+plan data below, write a comprehensive Markdown travel guide.
 
 TRIP DETAILS:
 - Destination: {trip.destination}
+- Origin: {origin or 'not specified'}
 - Dates: {trip.start_date} to {trip.end_date}
 - Travelers: {trip.num_travelers}
 - Budget: {trip.budget_level}
 - Interests: {json.dumps(trip.interests)}
 - Dietary restrictions: {json.dumps(trip.dietary_restrictions)}
 
-COMPLETE ITINERARY & PLAN DATA:
+ITINERARY:
 {plan_json}
 
 FLIGHTS:
@@ -1476,78 +1561,60 @@ FLIGHTS:
 ACCOMMODATIONS:
 {accom_info}
 
-Generate the following sections in MARKDOWN format:
+Write the guide with these sections:
 
 ## 🌍 Destination Overview
-Brief overview of the destination(s), best time to visit, overall vibe.
+Brief overview, best time to visit, overall vibe.
+
+## 🛂 Visa & Entry Requirements
+Visa requirements from the origin country, documents needed, health requirements.
+
+## 📱 Essential Apps to Install
+Must-have apps with SPECIFIC names: transit, maps, ride-hailing, food delivery,
+translation, payment apps. Include download links where possible.
+
+## 💳 Payment & Money Guide
+Local currency, how locals pay, tipping culture with specific percentages,
+ATM tips, best exchange options, contactless/Apple Pay availability.
 
 ## 🗣️ Essential Phrasebook
-20+ useful phrases in the local language(s) with pronunciation guides. Include greetings,
-ordering food, asking directions, emergencies, and polite expressions.
+20+ useful phrases in the local language(s) with pronunciation.
 
 ## 🎒 Packing List
-Customized packing list based on the destination, weather, activities planned, and trip duration.
-Group by category (clothing, electronics, documents, toiletries, etc.)
+Customised for the destination, weather, and planned activities.
 
 ## 🍽️ Food & Dining Guide
-Must-try local dishes, restaurant etiquette, tipping culture, dietary restriction tips,
-food safety advice, and recommended restaurants from the itinerary.
+Must-try dishes, restaurant etiquette, tipping, dietary restriction tips.
 
 ## 🚇 Transportation Guide
-How to get from the airport, public transit overview, ride-hailing apps available,
-city-specific transport tips, and passes/cards to buy.
+Airport transfers, transit cards to buy, ride-hailing apps, city-specific tips.
 
-## 💰 Money & Budget Tips
-Local currency, exchange rates, tipping culture, average costs for meals/transport/attractions,
-money-saving tips specific to the destination.
+## 🌐 SIM Card & Connectivity
+Best eSIM/SIM options, costs, WiFi availability.
 
-## 🏥 Emergency Information
-Emergency numbers, nearest hospitals/clinics, embassy/consulate info, travel insurance
-reminders, and safety tips for the destination.
-
-## 📱 Useful Apps & Resources
-Must-have apps for the destination, offline maps, translation apps, local services.
+## ⚠️ Safety & Cultural Tips
+Scams to watch for, cultural etiquette, dress codes, emergency numbers.
 
 ## 📋 Day-by-Day Quick Reference
-A compact reference card for each day: key activities, addresses, reservation confirmations needed.
+Compact card for each day: key activities, addresses, what to bring.
 
-Return the complete guide in Markdown format."""
-
-    provider = os.getenv("LLM_PROVIDER", "openai").lower().strip()
+Return the complete guide in Markdown format. Be SPECIFIC — always name real apps,
+real transit cards, real prices.""",
+        expected_output="A complete Markdown travel guide with all sections.",
+        agent=writer,
+        context=[research_task],
+    )
 
     try:
-        if provider == "anthropic":
-            import anthropic
-            client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-            model = os.getenv("LLM_MODEL", "claude-sonnet-4-20250514")
-            response = client.messages.create(
-                model=model,
-                max_tokens=8000,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            guide_text = response.content[0].text
-        elif provider == "gemini":
-            # Use OpenAI-compatible endpoint for Gemini
-            from openai import OpenAI
-            client = OpenAI(api_key=os.getenv("GEMINI_API_KEY"),
-                           base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
-            model = os.getenv("LLM_MODEL", "gemini-2.0-flash")
-            response = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=8000,
-            )
-            guide_text = response.choices[0].message.content
-        else:
-            from openai import OpenAI
-            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-            model = os.getenv("LLM_MODEL", "gpt-4o-mini")
-            response = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=8000,
-            )
-            guide_text = response.choices[0].message.content
+        crew = CrewCrew(
+            agents=[researcher, writer],
+            tasks=[research_task, guide_task],
+            process=CrewProcess.sequential,
+            verbose=False,
+        )
+        crew.kickoff()
+
+        guide_text = guide_task.output.raw if guide_task.output else "Guide generation produced no output."
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Guide generation failed: {str(e)}")
 
