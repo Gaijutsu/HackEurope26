@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext'
 import * as api from '../api'
 import TripNav from '../components/TripNav'
 import ItineraryChat from '../components/ItineraryChat'
+import ItineraryMap from '../components/ItineraryMap'
 import './TripView.css'
 
 const pageVariants = {
@@ -166,98 +167,112 @@ export default function TripView() {
             ))}
           </div>
 
-          {/* Items */}
-          <div className="trip-view__items-header">
-            <h2>Day {selectedDay}</h2>
-            <span className="trip-view__items-count">{items.length} activities</span>
-          </div>
+          {/* Two-column body: itinerary left, map right */}
+          <div className="trip-view__body">
+            {/* Left: items list */}
+            <div className="trip-view__left">
+              <div className="trip-view__items-header">
+                <h2>Day {selectedDay}</h2>
+                <span className="trip-view__items-count">{items.length} activities</span>
+              </div>
 
-          <div className="trip-view__timeline">
-            <AnimatePresence mode="wait">
-              {items.map((item, i) => (
-                <motion.div
-                  key={item.id}
-                  className="itin-item"
-                  variants={itemVariants}
-                  initial="hidden"
-                  animate="visible"
-                  custom={i}
-                >
-                  <div className="itin-item__time">
-                    <span className="itin-item__time-text">{item.start_time}</span>
-                    <span className="itin-item__duration">{item.duration_minutes}m</span>
-                  </div>
+              <div className="trip-view__timeline">
+                <AnimatePresence mode="wait">
+                  {items.map((item, i) => (
+                    <motion.div
+                      key={item.id}
+                      className="itin-item"
+                      variants={itemVariants}
+                      initial="hidden"
+                      animate="visible"
+                      custom={i}
+                    >
+                      <div className="itin-item__time">
+                        <span className="itin-item__time-text">{item.start_time}</span>
+                        <span className="itin-item__duration">{item.duration_minutes}m</span>
+                      </div>
 
-                  <div className="itin-item__connector">
-                    <div className="itin-item__dot" />
-                    {i < items.length - 1 && <div className="itin-item__line" />}
-                  </div>
+                      <div className="itin-item__connector">
+                        <div className="itin-item__dot" />
+                        {i < items.length - 1 && <div className="itin-item__line" />}
+                      </div>
 
-                  <div className="itin-item__content">
-                    <div className="itin-item__header">
-                      <h3 className="itin-item__title">
-                        {item.title}
-                        {item.is_ai_suggested ? ' ⭐' : ''}
-                      </h3>
-                      <StatusTag status={item.status} />
-                    </div>
+                      <div className="itin-item__content">
+                        <div className="itin-item__header">
+                          <h3 className="itin-item__title">
+                            {item.title}
+                            {item.is_ai_suggested ? ' ⭐' : ''}
+                          </h3>
+                          <StatusTag status={item.status} />
+                        </div>
 
-                    <p className="itin-item__desc">{item.description}</p>
+                        <p className="itin-item__desc">{item.description}</p>
 
-                    {item.location && (
-                      <div className="itin-item__location">
-                        {item.google_maps_url ? (
-                          <a
-                            href={item.google_maps_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="itin-item__maps-link"
-                          >
-                            📍 {item.location}
-                          </a>
-                        ) : (
-                          <span>📍 {item.location}</span>
+                        {item.location && (
+                          <div className="itin-item__location">
+                            {item.google_maps_url ? (
+                              <a
+                                href={item.google_maps_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="itin-item__maps-link"
+                              >
+                                📍 {item.location}
+                              </a>
+                            ) : (
+                              <span>📍 {item.location}</span>
+                            )}
+                          </div>
+                        )}
+
+                        {item.cost_usd > 0 && (
+                          <div className="itin-item__cost">
+                            💵 ${item.cost_usd}
+                            {item.currency !== 'USD' && item.cost_local && (
+                              <span className="itin-item__cost-local"> ({item.cost_local})</span>
+                            )}
+                          </div>
+                        )}
+
+                        {item.status === 'planned' && (
+                          <div className="itin-item__actions">
+                            <button
+                              className="itin-item__action-btn itin-item__action-btn--done"
+                              onClick={() => handleComplete(item.id)}
+                            >
+                              ✓ Done
+                            </button>
+                            <select
+                              className="itin-item__delay-select"
+                              defaultValue=""
+                              onChange={(e) => {
+                                if (e.target.value) handleDelay(item.id, parseInt(e.target.value))
+                              }}
+                            >
+                              <option value="" disabled>Delay to...</option>
+                              {days.map((d) => (
+                                <option key={d.day_number} value={d.day_number}>
+                                  Day {d.day_number}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
                         )}
                       </div>
-                    )}
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              </div>
+            </div>
 
-                    {item.cost_usd > 0 && (
-                      <div className="itin-item__cost">
-                        💵 ${item.cost_usd}
-                        {item.currency !== 'USD' && item.cost_local && (
-                          <span className="itin-item__cost-local"> ({item.cost_local})</span>
-                        )}
-                      </div>
-                    )}
-
-                    {item.status === 'planned' && (
-                      <div className="itin-item__actions">
-                        <button
-                          className="itin-item__action-btn itin-item__action-btn--done"
-                          onClick={() => handleComplete(item.id)}
-                        >
-                          ✓ Done
-                        </button>
-                        <select
-                          className="itin-item__delay-select"
-                          defaultValue=""
-                          onChange={(e) => {
-                            if (e.target.value) handleDelay(item.id, parseInt(e.target.value))
-                          }}
-                        >
-                          <option value="" disabled>Delay to...</option>
-                          {days.map((d) => (
-                            <option key={d.day_number} value={d.day_number}>
-                              Day {d.day_number}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-                  </div>
-                </motion.div>
-              ))}
-            </AnimatePresence>
+            {/* Right: map */}
+            <div className="trip-view__right">
+              <ItineraryMap
+                key={selectedDay}
+                items={items}
+                destination={trip?.destination || ''}
+              />
+            </div>
           </div>
         </>
       )}
