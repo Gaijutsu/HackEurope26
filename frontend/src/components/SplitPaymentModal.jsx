@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import * as api from '../api'
 import './SplitPaymentModal.css'
@@ -23,6 +23,24 @@ export default function SplitPaymentModal({
   const [splits, setSplits] = useState(null)
   const [error, setError] = useState('')
 
+  // Re-sync payer names when numTravelers changes (trip loads async)
+  useEffect(() => {
+    setPayerNames(prev => {
+      if (prev.length === numTravelers) return prev
+      return Array(numTravelers).fill('').map((_, i) =>
+        i < prev.length ? prev[i] : `Traveler ${i + 1}`
+      )
+    })
+  }, [numTravelers])
+
+  // Reset state when modal reopens
+  useEffect(() => {
+    if (isOpen) {
+      setSplits(null)
+      setError('')
+    }
+  }, [isOpen])
+
   const shareAmount = totalCost ? (totalCost / numTravelers).toFixed(2) : '0.00'
 
   async function handleCreateSplits() {
@@ -40,8 +58,12 @@ export default function SplitPaymentModal({
         itemId,
         payerNames: payerNames.map(n => n.trim()),
       })
-      setSplits(result)
-      onSuccess?.()
+      if (result.warning && !result.splits) {
+        setError(result.warning)
+      } else {
+        setSplits(result)
+        onSuccess?.()
+      }
     } catch (err) {
       setError(err.message)
     } finally {

@@ -911,6 +911,105 @@ def _auto_select_best(flights: list[dict], accommodations: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Itinerary modification helpers
+# ---------------------------------------------------------------------------
+
+def _detect_affected_days(
+    user_message: str,
+    itinerary: list[dict],
+) -> set[int] | None:
+    """Identify which day numbers the user's message targets.
+
+    Returns a set of day_number ints, or *None* when the scope is
+    ambiguous (= send all days).  This is a fast heuristic — no LLM call.
+
+    Detects:
+      • Explicit day references: "day 3", "on day 1 and 2", "the third day"
+      • City references: "while we're in Paris" → days whose city is Paris
+      • Date references: "on February 24" → matching day
+      • Keywords implying everything: "all days", "every day", "the whole trip"
+    """
+    import re as _re
+
+    msg = user_message.lower()
+
+    # "all days" / "every day" / "the whole trip" → all days
+    if _re.search(r"\b(all\s+days?|every\s+day|whole\s+trip|entire\s+trip)\b", msg):
+        return None
+
+    found: set[int] = set()
+    all_days = {d.get("day_number") for d in itinerary}
+
+    # Explicit "day N" references
+    for m in _re.finditer(r"\bday\s*(\d+)\b", msg):
+        n = int(m.group(1))
+        if n in all_days:
+            found.add(n)
+
+    # Ordinal words: "first day", "second day", "last day"
+    ordinals = {"first": 1, "second": 2, "third": 3, "fourth": 4,
+                "fifth": 5, "sixth": 6, "seventh": 7, "last": max(all_days) if all_days else 1}
+    for word, n in ordinals.items():
+        if _re.search(rf"\b{word}\s+day\b", msg):
+            if n in all_days:
+                found.add(n)
+
+    # City references → all days in that city
+    for day in itinerary:
+        city = (day.get("city") or "").lower()
+        if city and city in msg:
+            found.add(day["day_number"])
+
+    # Date references (YYYY-MM-DD or "February 24" style)
+    for day in itinerary:
+        date_str = day.get("date", "")
+        if date_str and date_str in msg:
+            found.add(day["day_number"])
+    # Month-day style: "february 24", "feb 24"
+    for day in itinerary:
+        date_str = day.get("date", "")
+        if date_str:
+            try:
+                dt = datetime.strptime(date_str, "%Y-%m-%d")
+                month_full = dt.strftime("%B").lower()   # february
+                month_short = dt.strftime("%b").lower()   # feb
+                day_num_str = str(dt.day)
+                if (_re.search(rf"\b{month_full}\s+{day_num_str}\b", msg) or
+                        _re.search(rf"\b{month_short}\s+{day_num_str}\b", msg)):
+                    found.add(day["day_number"])
+            except Exception:
+                pass
+
+    # "today" / "tomorrow" — relative to trip start
+    if "today" in msg or "tomorrow" in msg:
+        return None  # ambiguous without knowing current progress
+
+    if found:
+        return found
+
+    # No explicit scope detected — fall back to all days
+    return None
+
+
+def _strip_heavy_fields(itinerary: list[dict]) -> list[dict]:
+    """Return a lightweight deep copy of the itinerary for LLM prompts.
+
+    Strips travel_info (recomputed after modification), internal IDs,
+    and status fields that add noise.  This can shrink the token count
+    by 30-50 %.
+    """
+    import copy
+    stripped = copy.deepcopy(itinerary)
+    for day in stripped:
+        for item in day.get("items", []):
+            item.pop("travel_info", None)
+            item.pop("delayed_to_day", None)
+            item.pop("is_ai_suggested", None)
+            item.pop("status", None)
+    return stripped
+
+
+# ---------------------------------------------------------------------------
 # Route enrichment
 # ---------------------------------------------------------------------------
 
@@ -1267,7 +1366,16 @@ class TripPlanner:
         user_message: str,
         chat_history: list[dict] | None = None,
     ) -> Dict[str, Any]:
-        """Modify the itinerary based on a user chat message (1 LLM call).
+        """Modify the itinerary based on a user chat message.
+
+        Optimised flow (typically 1 LLM call, targeting only affected days):
+          1. Detect which days are affected by the request.
+          2. Strip heavy fields (travel_info) — they are recomputed anyway.
+          3. Send ONLY affected days to the LLM (with a brief summary of
+             unchanged days for context).  The LLM returns only the changed
+             days, drastically cutting input+output tokens.
+          4. Merge changed days back into the full itinerary.
+          5. Re-run route enrichment only on changed days.
 
         Returns {"itinerary": [...], "reply": "...", "travel_prefs": {...}}
         """
@@ -1276,15 +1384,49 @@ class TripPlanner:
         end = trip_data["end_date"]
         duration = _calc_duration(start, end)
         interests = ", ".join(trip_data.get("interests", [])) or "general sightseeing"
-        budget = f"${trip_data.get('budget_level', 1000):,} total"
+        budget = trip_data.get("budget_level", "mid")
 
-        itin_json = json.dumps(current_itinerary, indent=2, default=str)
+        # ------------------------------------------------------------------
+        # 1. Detect which days are targeted by the user request
+        # ------------------------------------------------------------------
+        affected_days = _detect_affected_days(user_message, current_itinerary)
 
-        # Gather neighbourhood data for cities in the itinerary
-        itin_cities = list({day.get("city", dest) for day in current_itinerary if day.get("city")})
+        # ------------------------------------------------------------------
+        # 2. Strip heavy fields to shrink the JSON payload
+        # ------------------------------------------------------------------
+        stripped_itinerary = _strip_heavy_fields(current_itinerary)
+
+        if affected_days is None:
+            # Couldn't narrow down — send all days (stripped)
+            days_to_send = stripped_itinerary
+            unchanged_summary = ""
+        else:
+            days_to_send = [d for d in stripped_itinerary if d.get("day_number") in affected_days]
+            unchanged = [d for d in stripped_itinerary if d.get("day_number") not in affected_days]
+            if unchanged:
+                unchanged_lines = []
+                for d in unchanged:
+                    titles = [it.get("title", "") for it in d.get("items", [])[:3]]
+                    unchanged_lines.append(
+                        f"  Day {d['day_number']} ({d.get('date','')}, {d.get('city','')}): "
+                        f"{', '.join(titles)}{'…' if len(d.get('items',[])) > 3 else ''}"
+                    )
+                unchanged_summary = (
+                    "\n--- UNCHANGED DAYS (for context only — do NOT include in output) ---\n"
+                    + "\n".join(unchanged_lines)
+                    + "\n--- END UNCHANGED ---\n"
+                )
+            else:
+                unchanged_summary = ""
+
+        itin_json = json.dumps(days_to_send, indent=2, default=str)
+
+        # ------------------------------------------------------------------
+        # 3. Gather enrichment data (neighbourhood DB + conditional web search)
+        # ------------------------------------------------------------------
+        itin_cities = list({d.get("city", dest) for d in days_to_send if d.get("city")})
         city_data_for_modify = _gather_city_data(itin_cities or [dest])
 
-        # Web search for current conditions if the message suggests real-time needs
         modify_web_results = ""
         if any(kw in user_message.lower() for kw in
                ("weather", "rain", "storm", "closed", "cancel", "strike", "event", "festival")):
@@ -1301,37 +1443,46 @@ class TripPlanner:
                 history_lines.append(f"{role}: {content}")
             history_context = "\n--- CONVERSATION HISTORY ---\n" + "\n".join(history_lines) + "\n--- END HISTORY ---\n\n"
 
+        # ------------------------------------------------------------------
+        # 4. LLM call — only affected days in, only changed days out
+        # ------------------------------------------------------------------
         system_prompt = """\
 You are an expert travel planner who adapts itineraries to real-world changes: \
 weather, cancellations, new wishes, schedule conflicts. You know specific \
 restaurants, attractions, and alternatives. When the user says it's raining you \
 swap outdoor activities for museums. You always name exact places and include \
-Google Maps URLs. You are also aware that the itinerary includes recommended \
-travel routes between stops (walking / transit). When the user mentions conditions \
-that affect HOW they travel — rain, transit strikes, wanting a walking day — \
-reflect that in the travel_prefs field. Always respond with valid JSON only."""
+Google Maps URLs. When the user mentions conditions that affect HOW they travel \
+— rain, transit strikes, wanting a walking day — reflect that in travel_prefs. \
+Always respond with valid JSON only."""
 
-        user_prompt = f"""You are modifying an existing {duration}-day itinerary for {dest}
-({start} to {end}).  Interests: {interests}. Budget: {budget}.
+        scope_note = (
+            f"You are modifying ONLY days {sorted(affected_days)} of a {duration}-day trip."
+            if affected_days else
+            f"You are modifying a {duration}-day trip."
+        )
+
+        user_prompt = f"""{scope_note}
+Destination: {dest} ({start} to {end}).  Interests: {interests}. Budget: {budget}.
 {modify_web_results}
 --- CITY DATA (use these specific restaurants/attractions as alternatives) ---
 {city_data_for_modify}
 --- END CITY DATA ---
-
-{history_context}--- CURRENT ITINERARY (JSON) ---
+{unchanged_summary}
+{history_context}--- DAYS TO MODIFY (JSON) ---
 {itin_json}
---- END CURRENT ITINERARY ---
+--- END DAYS TO MODIFY ---
 
 THE USER SAYS:
 \"{user_message}\"
 
 INSTRUCTIONS:
 1. Understand what the user wants changed.
-2. Keep UNCHANGED days exactly as they are — copy them verbatim.
-3. For CHANGED days, keep as many original items as possible.
+2. Return ONLY the day objects you actually modified — do NOT include unchanged days.
+3. For changed days, keep as many original items as possible.
 4. Every location MUST have a google_maps_url.
 5. Name every restaurant/cafe specifically — never say "find a local restaurant".
-6. Include cost_usd, cost_local, currency for every item.
+6. Pick alternatives from the CITY DATA above when possible.
+7. Include cost_usd, cost_local, currency for every item.
 
 TRAVEL PREFERENCE DETECTION:
 If the message implies a travel-mode constraint, include "travel_prefs":
@@ -1343,7 +1494,7 @@ Return a JSON object:
 {{
   "reply": "Short 1-3 sentence confirmation of changes.",
   "travel_prefs": {{"avoid": [...], "prefer": [...]}},
-  "itinerary": [ <full modified itinerary> ]
+  "changed_days": [ <ONLY the modified day objects, same schema as input> ]
 }}
 
 Return ONLY valid JSON."""
@@ -1358,9 +1509,10 @@ Return ONLY valid JSON."""
                 "travel_prefs": {},
             }
 
-        new_itinerary = result.get("itinerary", current_itinerary)
         reply = result.get("reply", "Itinerary updated.")
         travel_prefs = result.get("travel_prefs") or {}
+        # Accept both key names for robustness
+        changed_days = result.get("changed_days") or result.get("itinerary") or []
 
         if not isinstance(travel_prefs, dict):
             travel_prefs = {}
@@ -1368,11 +1520,46 @@ Return ONLY valid JSON."""
             if key not in travel_prefs or not isinstance(travel_prefs[key], list):
                 travel_prefs.setdefault(key, [])
 
-        _normalise_itinerary_items(new_itinerary, dest)
-        _enrich_itinerary_with_routes(new_itinerary, travel_prefs)
+        # ------------------------------------------------------------------
+        # 5. Merge changed days back into the full itinerary
+        # ------------------------------------------------------------------
+        changed_map = {d["day_number"]: d for d in changed_days if "day_number" in d}
+        merged_itinerary = []
+        changed_day_numbers = set()
+        for day in current_itinerary:
+            dn = day.get("day_number")
+            if dn in changed_map:
+                merged_itinerary.append(changed_map[dn])
+                changed_day_numbers.add(dn)
+            else:
+                merged_itinerary.append(day)  # unchanged — keep as-is
+
+        # Append any new days the LLM added that weren't in the original
+        for dn, day in changed_map.items():
+            if dn not in {d.get("day_number") for d in merged_itinerary}:
+                merged_itinerary.append(day)
+                changed_day_numbers.add(dn)
+
+        _normalise_itinerary_items(merged_itinerary, dest)
+
+        # Only re-run route enrichment on changed days (saves API calls)
+        for day in merged_itinerary:
+            if day.get("day_number") in changed_day_numbers:
+                city = day.get("city", "")
+                items = day.get("items", [])
+                if len(items) > 1:
+                    try:
+                        compute_routes_for_day(items, city, travel_prefs)
+                    except Exception as exc:
+                        logger.warning("Route enrichment failed for day %s: %s",
+                                       day.get("day_number"), exc)
+                        for item in items:
+                            item.setdefault("travel_info", {})
+                elif items:
+                    items[0].setdefault("travel_info", {})
 
         return {
-            "itinerary": new_itinerary,
+            "itinerary": merged_itinerary,
             "reply": reply,
             "travel_prefs": travel_prefs,
         }

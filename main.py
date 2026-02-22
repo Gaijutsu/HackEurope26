@@ -1364,9 +1364,10 @@ def create_split_payments(trip_id: str, user_id: str, body: CreateSplitRequest):
         raise HTTPException(status_code=400, detail="Invalid item_type")
     
     if num_travelers != len(body.payer_names):
-        return {
-            "warning": f"Number of payers ({len(body.payer_names)}) doesn't match trip travelers ({num_travelers})",
-        }
+        raise HTTPException(
+            status_code=400,
+            detail=f"Number of payers ({len(body.payer_names)}) doesn't match trip travelers ({num_travelers}). Please provide exactly {num_travelers} names.",
+        )
     
     share_amount = round(total_cost / num_travelers, 2)
     share_cents = int(share_amount * 100)
