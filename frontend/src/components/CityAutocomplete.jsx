@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { searchCities } from '../data/cities'
 import './CityAutocomplete.css'
 
-export default function CityAutocomplete({ value, onChange, onValidSelect, disabled }) {
+export default function CityAutocomplete({ value, onChange, onValidSelect, disabled, placeholder = 'Where do you want to go?', className = 'landing__input' }) {
     const [suggestions, setSuggestions] = useState([])
     const [isOpen, setIsOpen] = useState(false)
     const [isLoading, setIsLoading] = useState(false)
@@ -121,8 +121,8 @@ export default function CityAutocomplete({ value, onChange, onValidSelect, disab
                 ref={inputRef}
                 id="destination-input"
                 type="text"
-                className="landing__input"
-                placeholder="Where do you want to go?"
+                className={className}
+                placeholder={placeholder}
                 value={value}
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
