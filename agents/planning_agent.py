@@ -61,7 +61,6 @@ try:
         from crewai_tools import SerperDevTool
         _web_search_tools.append(SerperDevTool())
 except Exception:
-    assert False
     pass  # web search unavailable - agents will use LLM knowledge only
 
 try:
@@ -997,6 +996,48 @@ Return ONLY valid JSON.""",
 
 
 # ---------------------------------------------------------------------------
+# Auto-select best options
+# ---------------------------------------------------------------------------
+
+def _auto_select_best(flights: list[dict], accommodations: list[dict]) -> None:
+    """Mark the best flight per type and best accommodation per city as 'selected'.
+
+    For flights: pick the cheapest option per flight_type (outbound, return).
+    For accommodations: pick the highest-rated (then cheapest) per city.
+    All others stay 'suggested'.
+    """
+    # --- Flights: cheapest per type ---
+    by_type: dict[str, list[dict]] = {}
+    for f in flights:
+        ft = f.get("flight_type", "outbound")
+        by_type.setdefault(ft, []).append(f)
+
+    for ft, group in by_type.items():
+        # Reset all to suggested first
+        for f in group:
+            f["status"] = "suggested"
+        # Pick cheapest
+        best = min(group, key=lambda f: f.get("price", float("inf")))
+        best["status"] = "selected"
+
+    # --- Accommodations: highest rated (then cheapest) per city ---
+    by_city: dict[str, list[dict]] = {}
+    for a in accommodations:
+        city = a.get("city", "unknown")
+        by_city.setdefault(city, []).append(a)
+
+    for city, group in by_city.items():
+        for a in group:
+            a["status"] = "suggested"
+        # Sort by rating desc (None → 0), then price asc
+        best = min(
+            group,
+            key=lambda a: (-(a.get("rating") or 0), a.get("total_price", float("inf"))),
+        )
+        best["status"] = "selected"
+
+
+# ---------------------------------------------------------------------------
 # Result parser
 # ---------------------------------------------------------------------------
 
@@ -1118,6 +1159,9 @@ def _parse_crew_result(
         itinerary, validation_notes = _validate_and_fix_itinerary(itinerary, dest, duration)
     except Exception as exc:
         logger.warning("Validator failed, using unvalidated itinerary: %s", exc)
+
+    # --- Auto-select best flight per type and best accommodation per city ---
+    _auto_select_best(flights, accommodations)
 
     # --- Compute travel routes between consecutive items per day ---
     _enrich_itinerary_with_routes(itinerary)
