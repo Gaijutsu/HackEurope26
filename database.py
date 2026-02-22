@@ -21,6 +21,7 @@ class User(Base):
     name = Column(String)
     password_hash = Column(String)
     preferences = Column(JSON, default=dict)  # dietary, interests, etc.
+    credits = Column(Integer, default=3)  # trip credits — start with 3 free
     created_at = Column(DateTime, default=datetime.utcnow)
     
     trips = relationship("Trip", back_populates="user", cascade="all, delete-orphan")

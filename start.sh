@@ -94,6 +94,24 @@ npx vite --port 5173 &
 VITE_PID=$!
 cd ..
 
-# ── Cleanup ──────────────────────────────────────────────
-kill $BACKEND_PID 2>/dev/null
-kill $VITE_PID 2>/dev/null
+# ── Cleanup on exit ──────────────────────────────────────
+cleanup() {
+    echo ""
+    echo "Shutting down..."
+    kill $BACKEND_PID 2>/dev/null
+    kill $VITE_PID 2>/dev/null
+    wait $BACKEND_PID 2>/dev/null
+    wait $VITE_PID 2>/dev/null
+    echo "Done."
+}
+trap cleanup EXIT INT TERM
+
+echo ""
+echo "======================================================"
+echo "  Backend:  http://localhost:8000"
+echo "  Frontend: http://localhost:5173"
+echo "  Press Ctrl+C to stop"
+echo "======================================================"
+
+# Wait for background processes to keep the script alive
+wait
