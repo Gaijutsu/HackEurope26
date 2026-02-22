@@ -177,7 +177,6 @@ export default function Planning() {
       {/* Agent pipeline */}
       <div className="planning__agents">
         <h2 className="planning__section-title">🧠 Agent Pipeline</h2>
-        <p className="planning__section-sub">Powered by CrewAI</p>
         <div className="planning__agent-list">
           {AGENTS.map((agent) => {
             const status = getAgentStatus(agent.key)
