@@ -261,6 +261,8 @@ export default function PlanForm() {
                             onValidSelect={(entry) => {
                                 setForm((prev) => ({ ...prev, originCity: entry.city }))
                             }}
+                            className="plan__input"
+                            placeholder="e.g. London, Paris, New York..."
                         />
                     </div>
 
