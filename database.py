@@ -32,6 +32,7 @@ class Trip(Base):
     user_id = Column(String, ForeignKey("users.id"))
     title = Column(String)
     destination = Column(String)  # city or country name
+    origin_city = Column(String, default='')  # departure city
     destination_type = Column(String)  # 'city' or 'country'
     start_date = Column(String)  # YYYY-MM-DD
     end_date = Column(String)  # YYYY-MM-DD

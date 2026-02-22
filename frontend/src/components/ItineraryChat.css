@@ -1,0 +1,273 @@
+/* ===== Itinerary Chat Widget ===== */
+
+.itinchat {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+/* Toggle FAB */
+.itinchat__toggle {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-deep) 100%);
+  color: white;
+  font-size: 1.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  cursor: pointer;
+  box-shadow: var(--shadow-lg), 0 0 24px rgba(196, 139, 147, 0.35);
+  transition: all var(--transition-fast);
+}
+
+.itinchat__toggle:hover {
+  transform: scale(1.08);
+  box-shadow: var(--shadow-lg), 0 0 36px rgba(196, 139, 147, 0.45);
+}
+
+.itinchat__toggle--open {
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  box-shadow: var(--shadow-md);
+  font-size: 1.1rem;
+}
+
+.itinchat__toggle--open:hover {
+  box-shadow: var(--shadow-md);
+}
+
+/* Panel */
+.itinchat__panel {
+  width: 380px;
+  max-height: 520px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Header */
+.itinchat__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.itinchat__header-icon {
+  font-size: 1.1rem;
+}
+
+.itinchat__header-title {
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* Messages area */
+.itinchat__messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 200px;
+  max-height: 340px;
+}
+
+/* Welcome state */
+.itinchat__welcome {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.itinchat__welcome-text {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.itinchat__suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.itinchat__suggestion {
+  text-align: left;
+  padding: 10px 14px;
+  font-size: 0.8rem;
+  color: var(--accent-deep);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  line-height: 1.4;
+}
+
+.itinchat__suggestion:hover:not(:disabled) {
+  background: rgba(232, 196, 200, 0.2);
+  border-color: var(--accent);
+}
+
+.itinchat__suggestion:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Message bubbles */
+.itinchat__msg {
+  display: flex;
+}
+
+.itinchat__msg--user {
+  justify-content: flex-end;
+}
+
+.itinchat__msg--assistant {
+  justify-content: flex-start;
+}
+
+.itinchat__msg-bubble {
+  max-width: 85%;
+  padding: 10px 14px;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  border-radius: var(--radius-md);
+  word-break: break-word;
+}
+
+.itinchat__msg--user .itinchat__msg-bubble {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-deep) 100%);
+  color: white;
+  border-bottom-right-radius: 4px;
+}
+
+.itinchat__msg--assistant .itinchat__msg-bubble {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-bottom-left-radius: 4px;
+}
+
+/* Loading dots */
+.itinchat__msg-bubble--loading {
+  display: flex;
+  gap: 5px;
+  padding: 12px 18px;
+}
+
+.itinchat__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-deep);
+  opacity: 0.4;
+  animation: itinchat-bounce 1.2s infinite ease-in-out;
+}
+
+.itinchat__dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.itinchat__dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes itinchat-bounce {
+  0%, 80%, 100% {
+    transform: scale(1);
+    opacity: 0.4;
+  }
+  40% {
+    transform: scale(1.3);
+    opacity: 1;
+  }
+}
+
+/* Input row */
+.itinchat__input-row {
+  display: flex;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-card);
+}
+
+.itinchat__input {
+  flex: 1;
+  padding: 10px 14px;
+  font-size: 0.84rem;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 100px;
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+
+.itinchat__input:focus {
+  border-color: var(--accent);
+}
+
+.itinchat__input::placeholder {
+  color: var(--text-muted);
+}
+
+.itinchat__input:disabled {
+  opacity: 0.6;
+}
+
+.itinchat__send {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-deep) 100%);
+  color: white;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.itinchat__send:hover:not(:disabled) {
+  transform: scale(1.08);
+}
+
+.itinchat__send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Responsive */
+@media (max-width: 480px) {
+  .itinchat__panel {
+    width: calc(100vw - 32px);
+    max-height: 70vh;
+  }
+
+  .itinchat {
+    bottom: 16px;
+    right: 16px;
+  }
+}

@@ -16,11 +16,19 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Any, Dict, Generator, List, Optional
 
 from crewai import Agent, Crew, Process, Task
 from crewai.tools import tool as crewai_tool
+
+# Thread-safe caches — avoid duplicate API calls between agent tools
+# and the result-parsing phase that builds the final DB-ready data.
+_flight_cache: dict[str, list] = {}
+_hotel_cache: dict[str, list] = {}
+_cache_lock = threading.Lock()
 
 TRACING = True
 VERBOSE = True
@@ -68,6 +76,11 @@ from mock_data import (
 
 # ---------------------------------------------------------------------------
 # IATA code mappings (city name → airport/city code for Amadeus)
+#
+# The hardcoded dicts serve as a fast first-pass lookup.  For cities NOT
+# in the dict, we try the Amadeus Locations API (if credentials exist),
+# then fall back to mock_data.get_airport_for_city().
+# All results are cached at runtime so each city is resolved at most once.
 # ---------------------------------------------------------------------------
 
 _CITY_TO_AIRPORT: dict[str, str] = {
@@ -78,6 +91,26 @@ _CITY_TO_AIRPORT: dict[str, str] = {
     "San Francisco": "SFO", "Miami": "MIA", "Boston": "BOS", "Kyoto": "KIX",
     "Osaka": "KIX", "Madrid": "MAD", "Lisbon": "LIS", "Vienna": "VIE",
     "Zurich": "ZRH", "Copenhagen": "CPH", "Stockholm": "ARN", "Seoul": "ICN",
+    # Extended coverage
+    "Munich": "MUC", "Hamburg": "HAM", "Milan": "MXP", "Florence": "FLR",
+    "Venice": "VCE", "Naples": "NAP", "Nice": "NCE", "Lyon": "LYS",
+    "Seville": "SVQ", "Malaga": "AGP", "Athens": "ATH", "Edinburgh": "EDI",
+    "Dublin": "DUB", "Brussels": "BRU", "Helsinki": "HEL", "Oslo": "OSL",
+    "Warsaw": "WAW", "Budapest": "BUD", "Bucharest": "OTP", "Zagreb": "ZAG",
+    "Marrakech": "RAK", "Cairo": "CAI", "Cape Town": "CPT", "Johannesburg": "JNB",
+    "Nairobi": "NBO", "Mumbai": "BOM", "Delhi": "DEL", "Beijing": "PEK",
+    "Shanghai": "PVG", "Hong Kong": "HKG", "Taipei": "TPE", "Hanoi": "HAN",
+    "Ho Chi Minh City": "SGN", "Bali": "DPS", "Kuala Lumpur": "KUL",
+    "Manila": "MNL", "Chiang Mai": "CNX", "Phuket": "HKT",
+    "Buenos Aires": "EZE", "Lima": "LIM", "Bogota": "BOG",
+    "Mexico City": "MEX", "Cancun": "CUN", "Sao Paulo": "GRU",
+    "Rio de Janeiro": "GIG", "Toronto": "YYZ", "Vancouver": "YVR",
+    "Montreal": "YUL", "Auckland": "AKL", "Queenstown": "ZQN",
+    "Honolulu": "HNL", "Las Vegas": "LAS", "Denver": "DEN",
+    "Seattle": "SEA", "Portland": "PDX", "Washington": "IAD",
+    "Philadelphia": "PHL", "Atlanta": "ATL", "Dallas": "DFW",
+    "Houston": "IAH", "Orlando": "MCO", "San Diego": "SAN",
+    "Bath": "BRS",
 }
 
 _CITY_TO_IATA_CITY: dict[str, str] = {
@@ -88,15 +121,85 @@ _CITY_TO_IATA_CITY: dict[str, str] = {
     "San Francisco": "SFO", "Miami": "MIA", "Boston": "BOS", "Kyoto": "OSA",
     "Osaka": "OSA", "Madrid": "MAD", "Lisbon": "LIS", "Vienna": "VIE",
     "Zurich": "ZRH", "Copenhagen": "CPH", "Stockholm": "STO", "Seoul": "SEL",
+    # Extended
+    "Munich": "MUC", "Hamburg": "HAM", "Milan": "MIL", "Florence": "FLR",
+    "Venice": "VCE", "Naples": "NAP", "Nice": "NCE", "Lyon": "LYS",
+    "Athens": "ATH", "Edinburgh": "EDI", "Dublin": "DUB",
+    "Brussels": "BRU", "Helsinki": "HEL", "Oslo": "OSL",
+    "Mumbai": "BOM", "Delhi": "DEL", "Beijing": "BJS",
+    "Shanghai": "SHA", "Hong Kong": "HKG", "Taipei": "TPE",
+    "Kuala Lumpur": "KUL", "Buenos Aires": "BUE",
+    "Mexico City": "MEX", "Sao Paulo": "SAO", "Toronto": "YTO",
+    "Montreal": "YMQ",
 }
+
+# Runtime cache for Amadeus Location API lookups (survives across calls)
+_iata_lookup_cache: dict[str, str] = {}
+
+
+def _amadeus_location_lookup(city: str, subtype: str = "AIRPORT") -> Optional[str]:
+    """Query the Amadeus Locations API for the IATA code of *city*.
+
+    ``subtype`` can be ``"AIRPORT"`` or ``"CITY"``.
+    Returns the IATA code string, or *None* on failure / missing credentials.
+    """
+    cache_key = f"{subtype}|{city}"
+    if cache_key in _iata_lookup_cache:
+        return _iata_lookup_cache[cache_key]
+
+    if not os.getenv("AMADEUS_CLIENT_ID"):
+        return None
+    try:
+        from amadeus import Client, ResponseError  # already in deps
+        _am = Client(
+            client_id=os.getenv("AMADEUS_CLIENT_ID", ""),
+            client_secret=os.getenv("AMADEUS_CLIENT_SECRET", ""),
+        )
+        resp = _am.reference_data.locations.get(
+            keyword=city,
+            subType=subtype,
+        )
+        if resp.data:
+            code = resp.data[0].get("iataCode", "")
+            if code:
+                _iata_lookup_cache[cache_key] = code
+                return code
+    except Exception:
+        pass
+    return None
 
 
 def _airport_code(city: str) -> str:
-    return _CITY_TO_AIRPORT.get(city, get_airport_for_city(city))
+    """Resolve a city name to an IATA airport code.
+
+    Lookup chain: hardcoded dict → Amadeus API → mock_data fallback.
+    """
+    if city in _CITY_TO_AIRPORT:
+        return _CITY_TO_AIRPORT[city]
+    # Try Amadeus Location API
+    code = _amadeus_location_lookup(city, "AIRPORT")
+    if code:
+        _CITY_TO_AIRPORT[city] = code  # cache for rest of session
+        return code
+    return get_airport_for_city(city)
 
 
 def _city_iata(city: str) -> str:
-    return _CITY_TO_IATA_CITY.get(city, city[:3].upper())
+    """Resolve a city name to an IATA *city* code (for hotel searches).
+
+    Lookup chain: hardcoded dict → Amadeus API → first 3 letters fallback.
+    """
+    if city in _CITY_TO_IATA_CITY:
+        return _CITY_TO_IATA_CITY[city]
+    code = _amadeus_location_lookup(city, "CITY")
+    if code:
+        _CITY_TO_IATA_CITY[city] = code
+        return code
+    # Last resort: try the airport code (often works for small cities)
+    apt = _CITY_TO_AIRPORT.get(city)
+    if apt:
+        return apt
+    return city[:3].upper()
 
 
 def _is_mock_flight(f: dict) -> bool:
@@ -382,16 +485,20 @@ def search_flights_tool(
     Returns:
         JSON string with up to 5 flight options.
     """
+    cache_key = f"flights|{origin.strip().lower()}|{destination.strip().lower()}|{departure_date}|{return_date}|{num_travelers}"
     origin_code = _airport_code(origin)
     dest_code = _airport_code(destination)
     results = _amadeus_flights_fn(origin_code, dest_code, departure_date, return_date, num_travelers)
     if results and "error" not in results[0]:
-        # Normalise if live Amadeus format
         if not _is_mock_flight(results[0]):
             results = _normalize_amadeus_flights(results, origin, destination)
+        with _cache_lock:
+            _flight_cache[cache_key] = list(results)
         return json.dumps(results[:5], default=str)
     # Amadeus failed — fall back to mock data
     results = generate_mock_flights(origin, destination, departure_date, return_date or None, num_travelers)
+    with _cache_lock:
+        _flight_cache[cache_key] = list(results)
     return json.dumps(results[:5], default=str)
 
 
@@ -411,14 +518,18 @@ def search_accommodations_tool(
     Returns:
         JSON string with up to 5 accommodation options.
     """
+    cache_key = f"hotels|{city.strip().lower()}|{check_in_date}|{check_out_date}|{num_guests}"
     city_code = _city_iata(city)
     results = _amadeus_hotels_fn(city_code, check_in_date, check_out_date, num_guests, "hotel")
     if results and "error" not in results[0]:
-        # Normalise if live Amadeus format
         if not _is_mock_accom(results[0]):
             results = _normalize_amadeus_hotels(results, city, check_in_date, check_out_date)
+        with _cache_lock:
+            _hotel_cache[cache_key] = list(results)
         return json.dumps(results[:5], default=str)
     results = generate_mock_accommodations(city, check_in_date, check_out_date, num_guests)
+    with _cache_lock:
+        _hotel_cache[cache_key] = list(results)
     return json.dumps(results[:5], default=str)
 
 
@@ -568,6 +679,7 @@ def _build_tasks(
     ) = agents
 
     dest = trip_data["destination"]
+    origin = trip_data.get("origin_city", "New York")
     start = trip_data["start_date"]
     end = trip_data["end_date"]
     travelers = trip_data.get("num_travelers", 1)
@@ -643,15 +755,15 @@ Trip details:
 - Departure date: {start}
 - Return date: {end}
 - Number of travelers: {travelers}
-- Origin: New York
+- Origin: {origin}
 
 Using the cities selected in the context, call the Search Flights tool with:
-  origin="New York", destination=<first city from context>,
+  origin="{origin}", destination=<first city from context>,
   departure_date="{start}", return_date="{end}", num_travelers={travelers}
 
 IMPORTANT: Your output MUST be a valid JSON object:
 {{
-  "origin": "New York",
+  "origin": "{origin}",
   "destination_city": "<first city from context>",
   "departure_date": "{start}",
   "return_date": "{end}",
@@ -806,37 +918,49 @@ def _parse_crew_result(
             }
             cities = defaults.get(dest, [f"{dest} City"])
 
-    # --- Flights via Amadeus (falls back to mock when no credentials) ---
-    origin = "New York"
-    origin_code = _airport_code(origin)
-    dest_code = _airport_code(cities[0])
-    raw_flights = _amadeus_flights_fn(origin_code, dest_code, start, end, travelers)
-    if not raw_flights or (isinstance(raw_flights, list) and raw_flights and "error" in raw_flights[0]):
-        flights = generate_mock_flights(origin, cities[0], start, end, travelers)
-    elif _is_mock_flight(raw_flights[0]):
-        # Already in DB-compatible format (mock data or pre-normalised)
-        flights = raw_flights
+    # --- Flights: reuse cached results from agent tool calls, fallback to API ---
+    origin = trip_data.get("origin_city", "New York")
+    flight_cache_key = f"flights|{origin.strip().lower()}|{cities[0].strip().lower()}|{start}|{end}|{travelers}"
+    with _cache_lock:
+        cached_flights = _flight_cache.get(flight_cache_key)
+    if cached_flights:
+        flights = cached_flights
     else:
-        # Live Amadeus format → normalise to DB schema
-        flights = _normalize_amadeus_flights(raw_flights, origin, cities[0])
-        if not flights:
+        # Cache miss — call API as fallback
+        origin_code = _airport_code(origin)
+        dest_code = _airport_code(cities[0])
+        raw_flights = _amadeus_flights_fn(origin_code, dest_code, start, end, travelers)
+        if not raw_flights or (isinstance(raw_flights, list) and raw_flights and "error" in raw_flights[0]):
             flights = generate_mock_flights(origin, cities[0], start, end, travelers)
+        elif _is_mock_flight(raw_flights[0]):
+            flights = raw_flights
+        else:
+            flights = _normalize_amadeus_flights(raw_flights, origin, cities[0])
+            if not flights:
+                flights = generate_mock_flights(origin, cities[0], start, end, travelers)
 
-    # --- Accommodations via Amadeus (falls back to mock when no credentials) ---
-    accommodations: list[dict] = []
-    for city in cities:
+    # --- Accommodations: reuse cached results, parallel multi-city fallback ---
+    def _fetch_city_hotels(city: str) -> list[dict]:
+        hotel_cache_key = f"hotels|{city.strip().lower()}|{start}|{end}|{travelers}"
+        with _cache_lock:
+            cached = _hotel_cache.get(hotel_cache_key)
+        if cached:
+            return cached[:3]
         city_code = _city_iata(city)
         raw_hotels = _amadeus_hotels_fn(city_code, start, end, travelers, "hotel")
         if not raw_hotels or (isinstance(raw_hotels, list) and raw_hotels and "error" in raw_hotels[0]):
-            hotels = generate_mock_accommodations(city, start, end, travelers)[:3]
+            return generate_mock_accommodations(city, start, end, travelers)[:3]
         elif _is_mock_accom(raw_hotels[0]):
-            hotels = raw_hotels[:3]
+            return raw_hotels[:3]
         else:
-            # Live Amadeus format → normalise to DB schema
             hotels = _normalize_amadeus_hotels(raw_hotels, city, start, end)[:3]
-            if not hotels:
-                hotels = generate_mock_accommodations(city, start, end, travelers)[:3]
-        accommodations.extend(hotels[:3])
+            return hotels if hotels else generate_mock_accommodations(city, start, end, travelers)[:3]
+
+    accommodations: list[dict] = []
+    with ThreadPoolExecutor(max_workers=max(len(cities), 1)) as pool:
+        futures = {pool.submit(_fetch_city_hotels, city): city for city in cities}
+        for future in as_completed(futures):
+            accommodations.extend(future.result())
 
     # --- Parse itinerary ---
     itinerary: list[dict] = []
@@ -926,32 +1050,64 @@ class TripPlanner:
 
     @staticmethod
     def plan_trip(trip_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Run the full planning crew synchronously and return the result."""
+        """Run the planning crew in three phases, parallelising independent agents.
+
+        Phase 1 (serial): DestinationResearcher → CitySelector
+        Phase 2 (parallel): FlightFinder ‖ AccommodationFinder
+        Phase 3 (serial): ItineraryPlanner (needs phases 1+2 context)
+        """
         agents = _build_agents()
         tasks = _build_tasks(trip_data, agents)
+        (
+            research_agent, city_agent,
+            flight_agent, accommodation_agent,
+            planner_agent,
+        ) = agents
+        research_task, city_task, flight_task, accommodation_task, itinerary_task = tasks
 
-        crew = Crew(
-            agents=list(agents),
-            tasks=tasks,
+        # --- Phase 1: Research + City Selection (sequential) ---
+        phase1_crew = Crew(
+            agents=[research_agent, city_agent],
+            tasks=[research_task, city_task],
             process=Process.sequential,
             verbose=VERBOSE,
-            tracing=TRACING
+            tracing=TRACING,
         )
-        crew.kickoff()
+        phase1_crew.kickoff()
+
+        # --- Phase 2: Flights ‖ Accommodations (parallel via threads) ---
+        def _run_mini_crew(agent, task):
+            mini = Crew(
+                agents=[agent],
+                tasks=[task],
+                process=Process.sequential,
+                verbose=VERBOSE,
+                tracing=TRACING,
+            )
+            mini.kickoff()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_flight = pool.submit(_run_mini_crew, flight_agent, flight_task)
+            f_accom = pool.submit(_run_mini_crew, accommodation_agent, accommodation_task)
+            f_flight.result()
+            f_accom.result()
+
+        # --- Phase 3: Itinerary (needs all prior context) ---
+        phase3_crew = Crew(
+            agents=[planner_agent],
+            tasks=[itinerary_task],
+            process=Process.sequential,
+            verbose=VERBOSE,
+            tracing=TRACING,
+        )
+        phase3_crew.kickoff()
+
         return _parse_crew_result(tasks, trip_data)
 
     @staticmethod
     def plan_trip_stream(trip_data: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
-        """Generator that yields SSE progress events as the crew executes."""
-        progress_events: list[dict] = []
-
-        agent_order = [
-            "DestinationResearcher",
-            "CitySelector",
-            "FlightFinder",
-            "AccommodationFinder",
-            "ItineraryPlanner",
-        ]
+        """Generator that yields SSE progress events while running a 3-phase crew."""
+        import time as _time
 
         agent_start_messages = {
             "DestinationResearcher": f"Researching {trip_data['destination']}...",
@@ -961,89 +1117,144 @@ class TripPlanner:
             "ItineraryPlanner": "Building your day-by-day itinerary...",
         }
 
+        progress_events: list[dict] = []
+
         def on_progress(event: dict):
             progress_events.append(event)
 
-        agents = _build_agents()
-        tasks = _build_tasks(trip_data, agents, on_progress=on_progress)
-
-        crew = Crew(
-            agents=list(agents),
-            tasks=tasks,
-            process=Process.sequential,
-            verbose=VERBOSE,
-        )
-
-        import threading
-        import time
-
-        result_holder: dict = {"done": False, "error": None}
-
-        def run_crew():
-            try:
-                crew.kickoff()
-                result_holder["done"] = True
-            except Exception as exc:
-                result_holder["error"] = exc
-                result_holder["done"] = True
-
-        thread = threading.Thread(target=run_crew, daemon=True)
-        thread.start()
-
-        yielded_agents: set = set()
-        started_agents: set = set()
-
-        while not result_holder["done"]:
+        def _drain_events(started):
             while progress_events:
                 event = progress_events.pop(0)
                 agent_name = event.get("agent", "")
-                if agent_name not in started_agents:
-                    started_agents.add(agent_name)
+                if agent_name not in started:
+                    started.add(agent_name)
                     yield {
                         "type": "progress",
                         "agent": agent_name,
                         "status": "running",
                         "message": agent_start_messages.get(agent_name, f"{agent_name} working..."),
                     }
-                yielded_agents.add(agent_name)
                 yield event
 
-            for agent_name in agent_order:
-                if agent_name not in started_agents and agent_name not in yielded_agents:
-                    idx = agent_order.index(agent_name)
-                    all_prev_done = all(a in yielded_agents for a in agent_order[:idx])
-                    if all_prev_done or idx == 0:
-                        started_agents.add(agent_name)
-                        yield {
-                            "type": "progress",
-                            "agent": agent_name,
-                            "status": "running",
-                            "message": agent_start_messages.get(agent_name, f"{agent_name} working..."),
-                        }
-                    break
+        agents = _build_agents()
+        tasks = _build_tasks(trip_data, agents, on_progress=on_progress)
+        (
+            research_agent, city_agent,
+            flight_agent, accommodation_agent,
+            planner_agent,
+        ) = agents
+        research_task, city_task, flight_task, accommodation_task, itinerary_task = tasks
 
-            time.sleep(0.5)
+        started_agents: set = set()
+        result_holder: dict = {"done": False, "error": None}
 
-        while progress_events:
-            event = progress_events.pop(0)
-            agent_name = event.get("agent", "")
-            if agent_name not in started_agents:
-                started_agents.add(agent_name)
-                yield {
-                    "type": "progress",
-                    "agent": agent_name,
-                    "status": "running",
-                    "message": agent_start_messages.get(agent_name, f"{agent_name} working..."),
-                }
-            yield event
+        # --- Phase 1: Research + City Selection (background thread) ---
+        yield {
+            "type": "progress", "agent": "DestinationResearcher",
+            "status": "running",
+            "message": agent_start_messages["DestinationResearcher"],
+        }
+        started_agents.add("DestinationResearcher")
+
+        def run_phase1():
+            try:
+                phase1 = Crew(
+                    agents=[research_agent, city_agent],
+                    tasks=[research_task, city_task],
+                    process=Process.sequential, verbose=VERBOSE,
+                )
+                phase1.kickoff()
+                result_holder["done"] = True
+            except Exception as exc:
+                result_holder["error"] = exc
+                result_holder["done"] = True
+
+        thread = threading.Thread(target=run_phase1, daemon=True)
+        thread.start()
+
+        while not result_holder["done"]:
+            yield from _drain_events(started_agents)
+            _time.sleep(0.3)
+        yield from _drain_events(started_agents)
 
         if result_holder.get("error"):
-            yield {
-                "type": "error",
-                "agent": "Orchestrator",
-                "status": "error",
-                "message": str(result_holder["error"]),
-            }
+            yield {"type": "error", "agent": "Orchestrator", "status": "error",
+                   "message": str(result_holder["error"])}
+            return
+
+        # --- Phase 2: Flights ‖ Accommodations (parallel, background) ---
+        yield {
+            "type": "progress", "agent": "FlightFinder",
+            "status": "running",
+            "message": agent_start_messages["FlightFinder"],
+        }
+        yield {
+            "type": "progress", "agent": "AccommodationFinder",
+            "status": "running",
+            "message": agent_start_messages["AccommodationFinder"],
+        }
+        started_agents.update(["FlightFinder", "AccommodationFinder"])
+
+        result_holder = {"done": False, "error": None}
+
+        def run_phase2():
+            try:
+                def _mini(agent, task):
+                    Crew(agents=[agent], tasks=[task],
+                         process=Process.sequential, verbose=VERBOSE).kickoff()
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    f1 = pool.submit(_mini, flight_agent, flight_task)
+                    f2 = pool.submit(_mini, accommodation_agent, accommodation_task)
+                    f1.result()
+                    f2.result()
+                result_holder["done"] = True
+            except Exception as exc:
+                result_holder["error"] = exc
+                result_holder["done"] = True
+
+        thread = threading.Thread(target=run_phase2, daemon=True)
+        thread.start()
+
+        while not result_holder["done"]:
+            yield from _drain_events(started_agents)
+            _time.sleep(0.3)
+        yield from _drain_events(started_agents)
+
+        if result_holder.get("error"):
+            yield {"type": "error", "agent": "Orchestrator", "status": "error",
+                   "message": str(result_holder["error"])}
+            return
+
+        # --- Phase 3: Itinerary (background) ---
+        yield {
+            "type": "progress", "agent": "ItineraryPlanner",
+            "status": "running",
+            "message": agent_start_messages["ItineraryPlanner"],
+        }
+        started_agents.add("ItineraryPlanner")
+
+        result_holder = {"done": False, "error": None}
+
+        def run_phase3():
+            try:
+                Crew(agents=[planner_agent], tasks=[itinerary_task],
+                     process=Process.sequential, verbose=VERBOSE).kickoff()
+                result_holder["done"] = True
+            except Exception as exc:
+                result_holder["error"] = exc
+                result_holder["done"] = True
+
+        thread = threading.Thread(target=run_phase3, daemon=True)
+        thread.start()
+
+        while not result_holder["done"]:
+            yield from _drain_events(started_agents)
+            _time.sleep(0.3)
+        yield from _drain_events(started_agents)
+
+        if result_holder.get("error"):
+            yield {"type": "error", "agent": "Orchestrator", "status": "error",
+                   "message": str(result_holder["error"])}
             return
 
         plan_data = _parse_crew_result(tasks, trip_data)
@@ -1055,6 +1266,131 @@ class TripPlanner:
             "message": "Trip planning complete!",
             "plan": plan_data,
         }
+
+    @staticmethod
+    def modify_itinerary_chat(
+        trip_data: Dict[str, Any],
+        current_itinerary: list[dict],
+        user_message: str,
+    ) -> Dict[str, Any]:
+        """Use a single LLM agent to modify the itinerary based on a user chat message.
+
+        Returns {"itinerary": [...], "reply": "..."} where *reply* is a short
+        natural-language confirmation of the changes made.
+        """
+        dest = trip_data["destination"]
+        start = trip_data["start_date"]
+        end = trip_data["end_date"]
+        duration = _calc_duration(start, end)
+        interests = ", ".join(trip_data.get("interests", [])) or "general sightseeing"
+        budget = trip_data.get("budget_level", "mid")
+
+        # Serialise the current itinerary so the agent can see it
+        itin_json = json.dumps(current_itinerary, indent=2, default=str)
+
+        modifier_tools = [get_city_info_tool]
+        modifier_tools.extend(_web_search_tools)
+
+        modifier_agent = Agent(
+            role="Itinerary Modification Specialist",
+            goal=(
+                "Modify an existing travel itinerary based on a user's natural-language "
+                "request. Preserve as much of the original plan as possible while making "
+                "the requested changes. Always use SPECIFIC named places (never generic)."
+            ),
+            backstory=(
+                "You are an expert travel planner who adapts itineraries to real-world "
+                "changes: weather, cancellations, new wishes, and schedule conflicts. "
+                "You know specific restaurants, attractions, and alternatives in every "
+                "major city. When the user says it's raining you swap outdoor activities "
+                "for museums, galleries, or covered markets. When transport is disrupted "
+                "you reroute. You always name exact places and include Google Maps URLs."
+            ),
+            tools=modifier_tools,
+            llm=_llm_name(),
+            verbose=VERBOSE,
+            allow_delegation=False,
+            max_iter=10,
+        )
+
+        modify_task = Task(
+            description=f"""You are modifying an existing {duration}-day itinerary for {dest}
+({start} to {end}).  Interests: {interests}. Budget: {budget}.
+
+--- CURRENT ITINERARY (JSON) ---
+{itin_json}
+--- END CURRENT ITINERARY ---
+
+THE USER SAYS:
+\"{user_message}\"
+
+INSTRUCTIONS:
+1. Understand what the user wants changed.  Examples:
+   - Weather change → replace outdoor activities with indoor alternatives for that day.
+   - Transport cancellation → adjust travel/transport items, find alternatives.
+   - Flight cancelled → note the issue, suggest rebooking or alternative travel.
+   - "I want to visit X" → insert it into the best day, shifting other items as needed.
+   - "I want to visit X on day N" → place it on that specific day.
+2. Keep UNCHANGED days exactly as they are — copy them verbatim.
+3. For CHANGED days, keep as many original items as possible and only swap/add/remove
+   what the user requested.
+4. Every location MUST have a google_maps_url in the format:
+   https://www.google.com/maps/search/PLACE+NAME+CITY
+5. Name every restaurant/cafe specifically — never say "find a local restaurant".
+6. Include cost_usd, cost_local, currency for every item.
+
+Return a JSON object with TWO keys:
+{{
+  "reply": "A short 1-3 sentence confirmation of what you changed (plain English).",
+  "itinerary": [ <the full modified itinerary array, same schema as the input> ]
+}}
+
+Return ONLY valid JSON, no markdown fences or extra text.""",
+            expected_output="A JSON object with 'reply' and 'itinerary' keys.",
+            agent=modifier_agent,
+        )
+
+        crew = Crew(
+            agents=[modifier_agent],
+            tasks=[modify_task],
+            process=Process.sequential,
+            verbose=VERBOSE,
+        )
+        crew.kickoff()
+
+        # Parse the result
+        raw = modify_task.output.raw if modify_task.output else "{}"
+        try:
+            result = _safe_json_parse(raw)
+        except Exception:
+            # Last-resort: return original itinerary with an error reply
+            return {
+                "itinerary": current_itinerary,
+                "reply": "Sorry, I couldn't understand how to modify the itinerary. Please try rephrasing your request.",
+            }
+
+        new_itinerary = result.get("itinerary", current_itinerary)
+        reply = result.get("reply", "Itinerary updated.")
+
+        # Ensure every item has required fields
+        for day in new_itinerary:
+            city_name = day.get("city", dest)
+            for i, item in enumerate(day.get("items", [])):
+                item.setdefault("id", f"day{day.get('day_number', 0)}_item{i}")
+                item.setdefault("status", "planned")
+                item.setdefault("delayed_to_day", None)
+                item.setdefault("is_ai_suggested", 1)
+                if "cost_usd" not in item:
+                    raw_cost = item.pop("cost", 0)
+                    item["cost_usd"] = raw_cost if isinstance(raw_cost, (int, float)) else 0
+                item.setdefault("cost_local", f"${item['cost_usd']}")
+                item.setdefault("currency", "USD")
+                item["cost"] = item["cost_usd"]
+                if not item.get("google_maps_url"):
+                    loc = item.get("location", item.get("title", city_name))
+                    item["google_maps_url"] = _gmaps_url(loc, city_name)
+
+        return {"itinerary": new_itinerary, "reply": reply}
 
     @staticmethod
     def _is_likely_country(destination: str) -> bool:

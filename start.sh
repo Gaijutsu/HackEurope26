@@ -87,10 +87,13 @@ python main.py &
 BACKEND_PID=$!
 sleep 3
 
-# ── Start frontend ───────────────────────────────────────
-echo "Starting Streamlit frontend on http://localhost:8501 ..."
-cd streamlit_app
-streamlit run app.py
+# ── Start Vite frontend ─────────────────────────────────
+echo "Starting Vite frontend on http://localhost:5173 ..."
+cd frontend
+npx vite --port 5173 &
+VITE_PID=$!
+cd ..
 
 # ── Cleanup ──────────────────────────────────────────────
 kill $BACKEND_PID 2>/dev/null
+kill $VITE_PID 2>/dev/null

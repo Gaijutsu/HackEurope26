@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useAuth } from '../contexts/AuthContext'
 import LoginBanner from '../components/LoginBanner'
+import CityAutocomplete from '../components/CityAutocomplete'
 import * as api from '../api'
 import './PlanForm.css'
 
@@ -70,6 +71,7 @@ export default function PlanForm() {
 
     const [form, setForm] = useState({
         vibe: initialVibe,
+        originCity: '',
         startDate: '',
         endDate: '',
         budget: 'mid',
@@ -154,6 +156,7 @@ export default function PlanForm() {
             const tripData = {
                 title: `Trip to ${destination}`,
                 destination: destination,
+                origin_city: form.originCity,
                 start_date: form.startDate,
                 end_date: form.endDate,
                 num_travelers: parseInt(form.travelers) || 1,
@@ -245,6 +248,22 @@ export default function PlanForm() {
                             onChange={handleChange}
                         />
                         {errors.vibe && <span className="plan__error-text">{errors.vibe}</span>}
+                    </div>
+
+                    {/* Origin City */}
+                    <div className="plan__section">
+                        <div className="plan__label-row">
+                            <h2 className="plan__section-title">Where are you travelling from?</h2>
+                        </div>
+                        <CityAutocomplete
+                            value={form.originCity}
+                            onChange={(val) => {
+                                setForm((prev) => ({ ...prev, originCity: val }))
+                            }}
+                            onValidSelect={(entry) => {
+                                setForm((prev) => ({ ...prev, originCity: entry.city }))
+                            }}
+                        />
                     </div>
 
                     {/* Dates */}

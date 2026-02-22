@@ -166,6 +166,17 @@ export async function regenerateItinerary(tripId, userId) {
   })
 }
 
+/**
+ * Send a chat message to modify the itinerary via an AI agent.
+ * Returns { reply: string, days_planned: number }
+ */
+export async function chatModifyItinerary(tripId, userId, message) {
+  return apiFetch(`/trips/${tripId}/chat?user_id=${encodeURIComponent(userId)}`, {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+  })
+}
+
 // ── Itinerary ─────────────────────────────────────────────────────────────
 
 export async function getItinerary(tripId, userId) {

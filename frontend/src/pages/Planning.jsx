@@ -41,8 +41,12 @@ export default function Planning() {
   const [error, setError] = useState('')
   const streamRef = useRef(null)
   const logsEndRef = useRef(null)
+  const startedRef = useRef(false)
 
   useEffect(() => {
+    // Guard against React StrictMode double-mount
+    if (startedRef.current) return
+    startedRef.current = true
     loadTripAndStart()
     return () => {
       if (streamRef.current) streamRef.current.cancel()
@@ -58,6 +62,12 @@ export default function Planning() {
         setIsComplete(true)
         setProgress(100)
         setStatusText('Planning already completed!')
+        return
+      }
+
+      if (tripData.planning_status === 'in_progress') {
+        setStatusText('⏳ Planning is already in progress…')
+        setProgress(50)
         return
       }
 

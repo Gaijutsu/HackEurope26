@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '../contexts/AuthContext'
 import * as api from '../api'
 import TripNav from '../components/TripNav'
+import ItineraryChat from '../components/ItineraryChat'
 import './TripView.css'
 
 const pageVariants = {
@@ -41,6 +42,7 @@ export default function TripView() {
   const [selectedDay, setSelectedDay] = useState(1)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [chatLoading, setChatLoading] = useState(false)
 
   useEffect(() => {
     loadData()
@@ -94,6 +96,22 @@ export default function TripView() {
       console.error('Failed to delay item:', err)
     }
   }
+
+  const handleChatSend = useCallback(
+    async (message) => {
+      setChatLoading(true)
+      try {
+        const result = await api.chatModifyItinerary(tripId, user.id, message)
+        // Reload itinerary to reflect changes
+        const itinData = await api.getItinerary(tripId, user.id)
+        setDays(itinData.days || [])
+        return result
+      } finally {
+        setChatLoading(false)
+      }
+    },
+    [tripId, user.id]
+  )
 
   const currentDay = days.find((d) => d.day_number === selectedDay)
   const items = currentDay?.items || []
@@ -242,6 +260,11 @@ export default function TripView() {
             </AnimatePresence>
           </div>
         </>
+      )}
+
+      {/* AI Chat for itinerary modifications */}
+      {trip && days.length > 0 && (
+        <ItineraryChat onSend={handleChatSend} loading={chatLoading} />
       )}
     </motion.div>
   )
