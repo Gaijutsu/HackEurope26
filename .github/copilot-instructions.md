@@ -95,4 +95,5 @@ Agent outputs are raw LLM text. `_safe_json_parse()` strips markdown ` ```json `
 | `LLM_MODEL` | No | Override model (defaults: `gpt-4o-mini`, `gemini-2.0-flash`, `claude-sonnet-4-20250514`) |
 | `AMADEUS_CLIENT_ID` + `AMADEUS_CLIENT_SECRET` | No | Live flight/hotel data (mock fallback) |
 | `TAVILY_API_KEY` / `SERPER_API_KEY` | No | Web search for DestinationResearcher |
+| `GOOGLE_MAPS_API_KEY` | No | Distance Matrix API for travel routes between itinerary items (mock fallback) |
 | `SECRET_KEY` | No | JWT signing (default: `hackathon-secret-key`) |

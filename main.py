@@ -473,6 +473,7 @@ def _save_plan_to_db(db, trip, plan_data: dict):
                 cost=item.get("cost_usd", item.get("cost", 0)),
                 currency=item.get("currency", "USD"),
                 booking_url=item.get("google_maps_url", item.get("booking_url")),
+                travel_info=item.get("travel_info", {}),
                 status="planned",
                 delayed_to_day=None,
                 is_ai_suggested=item.get("is_ai_suggested", 1),
@@ -700,6 +701,16 @@ def regenerate_itinerary(trip_id: str, user_id: str):
     # Delete old itinerary items
     db.query(ItineraryItem).filter(ItineraryItem.trip_id == trip_id).delete()
 
+    # Enrich with travel routes between consecutive items
+    from agents.RouteAgent import compute_routes_for_day as _compute_routes
+    for day in new_itinerary:
+        city = day.get("city", "")
+        items = day.get("items", [])
+        if len(items) > 1:
+            _compute_routes(items, city)
+        elif items:
+            items[0].setdefault("travel_info", {})
+
     # Save new itinerary items
     for day in new_itinerary:
         for item in day.get("items", []):
@@ -715,6 +726,7 @@ def regenerate_itinerary(trip_id: str, user_id: str):
                 cost=item.get("cost_usd", item.get("cost", 0)),
                 currency=item.get("currency", "USD"),
                 booking_url=item.get("google_maps_url", item.get("booking_url")),
+                travel_info=item.get("travel_info", {}),
                 status="planned",
                 delayed_to_day=None,
                 is_ai_suggested=item.get("is_ai_suggested", 1),
@@ -787,6 +799,7 @@ def chat_modify_itinerary(trip_id: str, body: ChatRequest, user_id: str):
                 cost=item.get("cost_usd", item.get("cost", 0)),
                 currency=item.get("currency", "USD"),
                 booking_url=item.get("google_maps_url", item.get("booking_url")),
+                travel_info=item.get("travel_info", {}),
                 status="planned",
                 delayed_to_day=None,
                 is_ai_suggested=item.get("is_ai_suggested", 1),
@@ -834,6 +847,7 @@ def get_itinerary(trip_id: str, user_id: str):
             "currency": item.currency,
             "google_maps_url": item.booking_url or "",
             "booking_url": item.booking_url,
+            "travel_info": item.travel_info or {},
             "status": item.status,
             "delayed_to_day": item.delayed_to_day,
             "is_ai_suggested": item.is_ai_suggested

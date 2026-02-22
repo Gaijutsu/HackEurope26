@@ -65,6 +65,7 @@ class ItineraryItem(Base):
     cost = Column(Float, default=0)
     currency = Column(String, default='USD')
     booking_url = Column(String, nullable=True)
+    travel_info = Column(JSON, default=dict)  # route from previous item: {walking, transit, recommended, display}
     status = Column(String, default='planned')  # planned, completed, skipped, delayed
     delayed_to_day = Column(Integer, nullable=True)
     is_ai_suggested = Column(Integer, default=1)  # 1 = AI, 0 = user added
@@ -135,6 +136,17 @@ def init_db():
     engine = create_engine("sqlite:///./trip_planner.db", connect_args={"check_same_thread": False})
     Base.metadata.create_all(bind=engine)
     
+    # Lightweight migration: add travel_info column if missing (create_all
+    # won't alter existing tables).
+    from sqlalchemy import inspect as sa_inspect, text
+    inspector = sa_inspect(engine)
+    if "itinerary_items" in inspector.get_table_names():
+        cols = [c["name"] for c in inspector.get_columns("itinerary_items")]
+        if "travel_info" not in cols:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE itinerary_items ADD COLUMN travel_info TEXT DEFAULT '{}'"))
+                conn.commit()
+
     Session = sessionmaker(bind=engine)
     db = Session()
     

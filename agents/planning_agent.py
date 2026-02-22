@@ -74,6 +74,11 @@ from mock_data import (
     get_airport_for_city,
 )
 
+try:
+    from .RouteAgent import compute_routes_for_day
+except ImportError:
+    from RouteAgent import compute_routes_for_day  # type: ignore
+
 # ---------------------------------------------------------------------------
 # IATA code mappings (city name → airport/city code for Amadeus)
 #
@@ -475,15 +480,9 @@ def search_flights_tool(
     return_date: str,
     num_travelers: int = 1,
 ) -> str:
-    """Search for available flights between two cities using Amadeus (or mock fallback).
-    Args:
-        origin: Departure city name (e.g. 'New York')
-        destination: Arrival city name (e.g. 'Tokyo')
-        departure_date: YYYY-MM-DD format
-        return_date: YYYY-MM-DD format (empty string for one-way)
-        num_travelers: Number of passengers
-    Returns:
-        JSON string with up to 5 flight options.
+    """Search for flights between two cities. Call with EXACTLY these named parameters:
+      origin="London", destination="Dublin", departure_date="2026-02-23", return_date="2026-02-25", num_travelers=4
+    Do NOT pass a list or array — pass each argument as a single string/int value.
     """
     cache_key = f"flights|{origin.strip().lower()}|{destination.strip().lower()}|{departure_date}|{return_date}|{num_travelers}"
     origin_code = _airport_code(origin)
@@ -509,14 +508,9 @@ def search_accommodations_tool(
     check_out_date: str,
     num_guests: int = 1,
 ) -> str:
-    """Search for hotels in a city using Amadeus (or mock fallback).
-    Args:
-        city: City name (e.g. 'Paris')
-        check_in_date: YYYY-MM-DD format
-        check_out_date: YYYY-MM-DD format
-        num_guests: Number of guests
-    Returns:
-        JSON string with up to 5 accommodation options.
+    """Search for hotels in a city. Call with EXACTLY these named parameters:
+      city="Paris", check_in_date="2026-02-23", check_out_date="2026-02-25", num_guests=4
+    Do NOT pass a list or array — pass each argument as a single string/int value.
     """
     cache_key = f"hotels|{city.strip().lower()}|{check_in_date}|{check_out_date}|{num_guests}"
     city_code = _city_iata(city)
@@ -595,7 +589,9 @@ def _build_agents():
         backstory=(
             "You are a flight search expert who uses the Search Flights tool to find optimal air "
             "travel options via the Amadeus GDS. Always use the tool with city names — IATA code "
-            "conversion is handled automatically. Never make up flight data."
+            "conversion is handled automatically. Never make up flight data. "
+            "CRITICAL: When calling the Search Flights tool, pass FLAT keyword arguments "
+            "(origin=\"London\", destination=\"Dublin\", ...). NEVER pass a JSON array or list."
         ),
         tools=[search_flights_tool],
         llm=_llm_name(),
@@ -610,7 +606,9 @@ def _build_agents():
         backstory=(
             "You are an accommodation expert who uses the Search Accommodations tool to find hotels "
             "via the Amadeus GDS. Always use the tool with city names — IATA conversion is automatic. "
-            "Never make up accommodation data."
+            "Never make up accommodation data. "
+            "CRITICAL: When calling the Search Accommodations tool, pass FLAT keyword arguments "
+            "(city=\"Paris\", check_in_date=\"2026-01-01\", ...). NEVER pass a JSON array or list."
         ),
         tools=[search_accommodations_tool],
         llm=_llm_name(),
@@ -757,11 +755,15 @@ Trip details:
 - Number of travelers: {travelers}
 - Origin: {origin}
 
-Using the cities selected in the context, call the Search Flights tool with:
-  origin="{origin}", destination=<first city from context>,
-  departure_date="{start}", return_date="{end}", num_travelers={travelers}
+Using the cities selected in the context, call the Search Flights tool ONCE with
+FLAT keyword arguments (NOT an array, NOT a list):
+  origin="{origin}"
+  destination=<first city from context>
+  departure_date="{start}"
+  return_date="{end}"
+  num_travelers={travelers}
 
-IMPORTANT: Your output MUST be a valid JSON object:
+After the tool returns results, your final output MUST be a valid JSON object:
 {{
   "origin": "{origin}",
   "destination_city": "<first city from context>",
@@ -996,6 +998,9 @@ def _parse_crew_result(
     if not itinerary:
         itinerary = _build_fallback_itinerary(cities, duration, start)
 
+    # --- Compute travel routes between consecutive items per day ---
+    _enrich_itinerary_with_routes(itinerary)
+
     summary = f"Planned {duration} days across {', '.join(cities)}"
 
     return {
@@ -1006,6 +1011,27 @@ def _parse_crew_result(
         "is_country_level": is_country,
         "planning_summary": summary,
     }
+
+
+def _enrich_itinerary_with_routes(itinerary: list[dict]) -> None:
+    """Add travel_info to each item in the itinerary (in-place).
+
+    Uses Google Maps Distance Matrix API (or mock fallback) to compute
+    walking and transit times between consecutive items within each day.
+    """
+    for day in itinerary:
+        city = day.get("city", "")
+        items = day.get("items", [])
+        if len(items) > 1:
+            try:
+                compute_routes_for_day(items, city)
+            except Exception as exc:
+                logger.warning("Route enrichment failed for day %s: %s",
+                               day.get("day_number"), exc)
+                for item in items:
+                    item.setdefault("travel_info", {})
+        elif items:
+            items[0].setdefault("travel_info", {})
 
 
 def _build_fallback_itinerary(
@@ -1389,6 +1415,9 @@ Return ONLY valid JSON, no markdown fences or extra text.""",
                 if not item.get("google_maps_url"):
                     loc = item.get("location", item.get("title", city_name))
                     item["google_maps_url"] = _gmaps_url(loc, city_name)
+
+        # Enrich with travel routes
+        _enrich_itinerary_with_routes(new_itinerary)
 
         return {"itinerary": new_itinerary, "reply": reply}
 
