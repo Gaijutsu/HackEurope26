@@ -781,6 +781,7 @@ def chat_modify_itinerary(trip_id: str, body: ChatRequest, user_id: str):
 
     new_itinerary = result["itinerary"]
     reply = result["reply"]
+    travel_prefs = result.get("travel_prefs", {})
 
     # Delete old itinerary items and save new ones
     db.query(ItineraryItem).filter(ItineraryItem.trip_id == trip_id).delete()
@@ -805,15 +806,18 @@ def chat_modify_itinerary(trip_id: str, body: ChatRequest, user_id: str):
                 is_ai_suggested=item.get("is_ai_suggested", 1),
             ))
 
-    # Update plan_data with new itinerary
+    # Update plan_data with new itinerary and travel preferences
     updated_plan = dict(trip.plan_data)
     updated_plan["itinerary"] = new_itinerary
+    if travel_prefs and (travel_prefs.get("avoid") or travel_prefs.get("prefer")):
+        updated_plan["travel_prefs"] = travel_prefs
     trip.plan_data = updated_plan
     db.commit()
 
     return {
         "reply": reply,
         "days_planned": len(new_itinerary),
+        "travel_prefs": travel_prefs,
     }
 
 

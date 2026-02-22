@@ -1013,18 +1013,24 @@ def _parse_crew_result(
     }
 
 
-def _enrich_itinerary_with_routes(itinerary: list[dict]) -> None:
+def _enrich_itinerary_with_routes(
+    itinerary: list[dict],
+    travel_prefs: dict | None = None,
+) -> None:
     """Add travel_info to each item in the itinerary (in-place).
 
     Uses Google Maps Distance Matrix API (or mock fallback) to compute
     walking and transit times between consecutive items within each day.
+
+    *travel_prefs*: optional ``{"avoid": [...], "prefer": [...]}`` with
+    mode tokens like ``"walking"`` / ``"transit"``.
     """
     for day in itinerary:
         city = day.get("city", "")
         items = day.get("items", [])
         if len(items) > 1:
             try:
-                compute_routes_for_day(items, city)
+                compute_routes_for_day(items, city, travel_prefs)
             except Exception as exc:
                 logger.warning("Route enrichment failed for day %s: %s",
                                day.get("day_number"), exc)
@@ -1301,8 +1307,10 @@ class TripPlanner:
     ) -> Dict[str, Any]:
         """Use a single LLM agent to modify the itinerary based on a user chat message.
 
-        Returns {"itinerary": [...], "reply": "..."} where *reply* is a short
-        natural-language confirmation of the changes made.
+        Returns {"itinerary": [...], "reply": "...", "travel_prefs": {...}}
+        where *reply* is a short natural-language confirmation of the changes
+        made and *travel_prefs* captures any travel-mode constraints that were
+        inferred from the user's message.
         """
         dest = trip_data["destination"]
         start = trip_data["start_date"]
@@ -1330,7 +1338,13 @@ class TripPlanner:
                 "You know specific restaurants, attractions, and alternatives in every "
                 "major city. When the user says it's raining you swap outdoor activities "
                 "for museums, galleries, or covered markets. When transport is disrupted "
-                "you reroute. You always name exact places and include Google Maps URLs."
+                "you reroute. You always name exact places and include Google Maps URLs.\n\n"
+                "You are also aware that the itinerary includes recommended travel routes "
+                "between stops (walking / transit).  When the user mentions conditions "
+                "that affect HOW they travel — rain (avoid walking), train/metro strike "
+                "(avoid transit), wanting a walking day (prefer walking) — you MUST "
+                "reflect that in the travel_prefs field of your output so that route "
+                "recommendations can be recalculated."
             ),
             tools=modifier_tools,
             llm=_llm_name(),
@@ -1365,14 +1379,29 @@ INSTRUCTIONS:
 5. Name every restaurant/cafe specifically — never say "find a local restaurant".
 6. Include cost_usd, cost_local, currency for every item.
 
-Return a JSON object with TWO keys:
+TRAVEL PREFERENCE DETECTION:
+If the user's message implies a constraint on how they move between locations,
+include a "travel_prefs" object in your response.  Recognised mode keywords:
+"walking" and "transit".
+
+Examples:
+- "It's raining"        → {{"avoid": ["walking"], "prefer": ["transit"]}}
+- "Trains are cancelled" → {{"avoid": ["transit"], "prefer": ["walking"]}}
+- "Metro strike"         → {{"avoid": ["transit"], "prefer": ["walking"]}}
+- "I want a walking day" → {{"avoid": [], "prefer": ["walking"]}}
+- "Let's use the metro"  → {{"avoid": [], "prefer": ["transit"]}}
+
+If the message has NO travel-mode implications, set "travel_prefs" to {{}}.
+
+Return a JSON object with THREE keys:
 {{
   "reply": "A short 1-3 sentence confirmation of what you changed (plain English).",
+  "travel_prefs": {{"avoid": [...], "prefer": [...]}},
   "itinerary": [ <the full modified itinerary array, same schema as the input> ]
 }}
 
 Return ONLY valid JSON, no markdown fences or extra text.""",
-            expected_output="A JSON object with 'reply' and 'itinerary' keys.",
+            expected_output="A JSON object with 'reply', 'travel_prefs', and 'itinerary' keys.",
             agent=modifier_agent,
         )
 
@@ -1393,10 +1422,19 @@ Return ONLY valid JSON, no markdown fences or extra text.""",
             return {
                 "itinerary": current_itinerary,
                 "reply": "Sorry, I couldn't understand how to modify the itinerary. Please try rephrasing your request.",
+                "travel_prefs": {},
             }
 
         new_itinerary = result.get("itinerary", current_itinerary)
         reply = result.get("reply", "Itinerary updated.")
+        travel_prefs = result.get("travel_prefs") or {}
+
+        # Validate travel_prefs shape
+        if not isinstance(travel_prefs, dict):
+            travel_prefs = {}
+        for key in ("avoid", "prefer"):
+            if key not in travel_prefs or not isinstance(travel_prefs[key], list):
+                travel_prefs.setdefault(key, [])
 
         # Ensure every item has required fields
         for day in new_itinerary:
@@ -1416,10 +1454,14 @@ Return ONLY valid JSON, no markdown fences or extra text.""",
                     loc = item.get("location", item.get("title", city_name))
                     item["google_maps_url"] = _gmaps_url(loc, city_name)
 
-        # Enrich with travel routes
-        _enrich_itinerary_with_routes(new_itinerary)
+        # Enrich with travel routes (respecting any detected travel preferences)
+        _enrich_itinerary_with_routes(new_itinerary, travel_prefs)
 
-        return {"itinerary": new_itinerary, "reply": reply}
+        return {
+            "itinerary": new_itinerary,
+            "reply": reply,
+            "travel_prefs": travel_prefs,
+        }
 
     @staticmethod
     def _is_likely_country(destination: str) -> bool:

@@ -318,6 +318,49 @@
 
 /* ===== Travel Route Badge (between items) ===== */
 
+/* Travel preferences banner */
+.travel-prefs-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  margin-bottom: 20px;
+  border-radius: 12px;
+  background: rgba(9, 132, 227, 0.06);
+  border: 1px solid rgba(9, 132, 227, 0.15);
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.travel-prefs-banner__icon {
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+.travel-prefs-banner__text {
+  flex: 1;
+}
+
+.travel-prefs-banner__text strong {
+  color: #0984e3;
+}
+
+.travel-prefs-banner__clear {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+
+.travel-prefs-banner__clear:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
 .travel-route {
   display: flex;
   align-items: center;
@@ -371,6 +414,14 @@
   border: 1px solid rgba(163, 157, 161, 0.15);
   font-weight: 500;
   font-size: 0.7rem;
+}
+
+.travel-route__badge--avoided {
+  text-decoration: line-through;
+  color: #d63031;
+  background: rgba(214, 48, 49, 0.06);
+  border-color: rgba(214, 48, 49, 0.15);
+  opacity: 0.7;
 }
 
 .travel-route__distance {

@@ -3,11 +3,12 @@ import { motion, AnimatePresence } from 'framer-motion'
 import './ItineraryChat.css'
 
 const SUGGESTIONS = [
-  "It's raining on day 2 — suggest indoor activities",
+  "It's raining — avoid walking, use transit instead",
+  "Trains are cancelled today, only walk",
+  "I want to spend day 2 walking around",
   "I'd like to visit a museum on day 1",
-  "Trains are cancelled on day 1, find alternatives",
-  "My return flight was cancelled",
   "Add a nice rooftop bar on the last evening",
+  "My return flight was cancelled",
 ]
 
 export default function ItineraryChat({ onSend, loading }) {
