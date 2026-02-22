@@ -113,6 +113,18 @@ class Accommodation(Base):
     
     trip = relationship("Trip", back_populates="accommodations")
 
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id = Column(String, primary_key=True, default=generate_id)
+    trip_id = Column(String, ForeignKey("trips.id"))
+    role = Column(String)  # 'user' or 'assistant'
+    content = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    trip = relationship("Trip")
+
+
 class City(Base):
     __tablename__ = "cities"
     

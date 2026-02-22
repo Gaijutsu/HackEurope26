@@ -49,3 +49,10 @@ pinterest-dl>=0.7.0
 
 # Stripe payments
 stripe>=7.0.0
+
+# Anthropic Claude SDK
+anthropic>=0.42.0
+
+# OpenMeteo weather API
+openmeteo-requests>=1.2.0
+requests-cache>=1.2.0

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useAuth } from '../contexts/AuthContext'
 import * as api from '../api'
@@ -16,12 +16,32 @@ export default function Accommodations() {
   const { tripId } = useParams()
   const { user } = useAuth()
 
+  const [searchParams, setSearchParams] = useSearchParams()
   const [accommodations, setAccommodations] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [bookingMsg, setBookingMsg] = useState('')
 
   useEffect(() => {
     loadAccommodations()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Handle Stripe redirect: verify booking on return
+  useEffect(() => {
+    const bookedId = searchParams.get('booked')
+    const sessionId = searchParams.get('session_id')
+    if (bookedId && sessionId) {
+      api.verifyBooking(tripId, 'accommodation', bookedId, sessionId, user.id)
+        .then(() => {
+          setBookingMsg('✅ Accommodation booked successfully!')
+          setAccommodations((prev) =>
+            prev.map((a) => (a.id === bookedId ? { ...a, status: 'booked' } : a))
+          )
+          setSearchParams({})
+          setTimeout(() => setBookingMsg(''), 4000)
+        })
+        .catch(() => setBookingMsg('⚠️ Could not verify booking — please check your email.'))
+    }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadAccommodations() {
@@ -39,6 +59,12 @@ export default function Accommodations() {
   async function handleBook(accId) {
     try {
       const result = await api.bookAccommodation(tripId, accId, user.id)
+      // If backend returns a Stripe Checkout URL, redirect to it
+      if (result.url) {
+        window.location.href = result.url
+        return
+      }
+      // Fallback: direct booking (Stripe not configured)
       setAccommodations((prev) =>
         prev.map((a) => (a.id === accId ? { ...a, status: 'booked' } : a))
       )
@@ -80,6 +106,7 @@ export default function Accommodations() {
         <h1 className="accom-page__title">🏨 Accommodations</h1>
       </header>
 
+      {bookingMsg && <div className="accom-page__success">{bookingMsg}</div>}
       {error && <div className="accom-page__error">{error}</div>}
 
       {!loading && accommodations.length === 0 ? (

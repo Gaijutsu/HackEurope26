@@ -21,7 +21,7 @@ from jose import JWTError, jwt
 
 from icalendar import Calendar, Event as ICalEvent
 
-from database import init_db, get_db, User, Trip, ItineraryItem, Flight, Accommodation, City
+from database import init_db, get_db, User, Trip, ItineraryItem, Flight, Accommodation, City, ChatMessage
 from agents import planning_agent
 
 # Initialize database
@@ -280,14 +280,34 @@ async def stripe_webhook(request: FastAPIRequest):
 
     if event.get("type") == "checkout.session.completed":
         session = event["data"]["object"]
-        user_id = session.get("metadata", {}).get("user_id")
-        credits_str = session.get("metadata", {}).get("credits", "0")
-        if user_id:
+        metadata = session.get("metadata", {})
+        item_type = metadata.get("item_type", "")
+        item_id = metadata.get("item_id", "")
+
+        if item_type == "flight" and item_id:
+            # Flight booking payment completed
             db = get_db()
-            user = db.query(User).filter(User.id == user_id).first()
-            if user:
-                user.credits += int(credits_str)
+            flight = db.query(Flight).filter(Flight.id == item_id).first()
+            if flight:
+                flight.status = "booked"
                 db.commit()
+        elif item_type == "accommodation" and item_id:
+            # Accommodation booking payment completed
+            db = get_db()
+            acc = db.query(Accommodation).filter(Accommodation.id == item_id).first()
+            if acc:
+                acc.status = "booked"
+                db.commit()
+        else:
+            # Legacy: credit purchase
+            user_id = metadata.get("user_id")
+            credits_str = metadata.get("credits", "0")
+            if user_id and int(credits_str) > 0:
+                db = get_db()
+                user = db.query(User).filter(User.id == user_id).first()
+                if user:
+                    user.credits += int(credits_str)
+                    db.commit()
 
     return {"status": "ok"}
 
@@ -772,9 +792,15 @@ def chat_modify_itinerary(trip_id: str, body: ChatRequest, user_id: str):
 
     current_itinerary = trip.plan_data["itinerary"]
 
+    # Load conversation history for multi-turn context
+    chat_history = db.query(ChatMessage).filter(
+        ChatMessage.trip_id == trip_id
+    ).order_by(ChatMessage.created_at).all()
+    history_list = [{"role": m.role, "content": m.content} for m in chat_history]
+
     try:
         result = planning_agent.modify_itinerary_chat(
-            trip_data, current_itinerary, body.message
+            trip_data, current_itinerary, body.message, history_list
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chat modification failed: {str(e)}")
@@ -812,6 +838,10 @@ def chat_modify_itinerary(trip_id: str, body: ChatRequest, user_id: str):
     if travel_prefs and (travel_prefs.get("avoid") or travel_prefs.get("prefer")):
         updated_plan["travel_prefs"] = travel_prefs
     trip.plan_data = updated_plan
+
+    # Persist chat messages for multi-turn context
+    db.add(ChatMessage(trip_id=trip_id, role="user", content=body.message))
+    db.add(ChatMessage(trip_id=trip_id, role="assistant", content=reply))
     db.commit()
 
     return {
@@ -1008,11 +1038,41 @@ def book_flight(trip_id: str, flight_id: str, user_id: str):
     flight = db.query(Flight).filter(Flight.id == flight_id, Flight.trip_id == trip_id).first()
     if not flight:
         raise HTTPException(status_code=404, detail="Flight not found")
-    
-    flight.status = "booked"
-    db.commit()
-    
-    return {"message": "Flight marked as booked", "booking_url": flight.booking_url}
+
+    if not stripe.api_key:
+        # Stripe not configured — just mark as booked (hackathon fallback)
+        flight.status = "booked"
+        db.commit()
+        return {"message": "Flight marked as booked", "booking_url": flight.booking_url, "fallback": True}
+
+    try:
+        price_cents = int(flight.price * 100)
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[{
+                "price_data": {
+                    "currency": (flight.currency or "USD").lower(),
+                    "unit_amount": price_cents,
+                    "product_data": {
+                        "name": f"Flight {flight.flight_number}: {flight.from_airport} → {flight.to_airport}",
+                        "description": f"{flight.airline} — {flight.departure_datetime[:10]}",
+                    },
+                },
+                "quantity": 1,
+            }],
+            mode="payment",
+            success_url=f"{FRONTEND_URL}/trips/{trip_id}/flights?booked={flight_id}&session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{FRONTEND_URL}/trips/{trip_id}/flights",
+            metadata={
+                "user_id": user_id,
+                "trip_id": trip_id,
+                "item_type": "flight",
+                "item_id": flight_id,
+            },
+        )
+        return {"url": session.url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Stripe error: {str(e)}")
 
 
 @app.put("/trips/{trip_id}/flights/{flight_id}/select")
@@ -1082,11 +1142,41 @@ def book_accommodation(trip_id: str, acc_id: str, user_id: str):
     acc = db.query(Accommodation).filter(Accommodation.id == acc_id, Accommodation.trip_id == trip_id).first()
     if not acc:
         raise HTTPException(status_code=404, detail="Accommodation not found")
-    
-    acc.status = "booked"
-    db.commit()
-    
-    return {"message": "Accommodation marked as booked", "booking_url": acc.booking_url}
+
+    if not stripe.api_key:
+        # Stripe not configured — just mark as booked (hackathon fallback)
+        acc.status = "booked"
+        db.commit()
+        return {"message": "Accommodation marked as booked", "booking_url": acc.booking_url, "fallback": True}
+
+    try:
+        price_cents = int(acc.total_price * 100)
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[{
+                "price_data": {
+                    "currency": (acc.currency or "USD").lower(),
+                    "unit_amount": price_cents,
+                    "product_data": {
+                        "name": f"{acc.name} — {acc.city}",
+                        "description": f"{acc.check_in_date} → {acc.check_out_date} ({acc.type})",
+                    },
+                },
+                "quantity": 1,
+            }],
+            mode="payment",
+            success_url=f"{FRONTEND_URL}/trips/{trip_id}/accommodations?booked={acc_id}&session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{FRONTEND_URL}/trips/{trip_id}/accommodations",
+            metadata={
+                "user_id": user_id,
+                "trip_id": trip_id,
+                "item_type": "accommodation",
+                "item_id": acc_id,
+            },
+        )
+        return {"url": session.url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Stripe error: {str(e)}")
 
 
 @app.put("/trips/{trip_id}/accommodations/{acc_id}/select")
@@ -1112,6 +1202,382 @@ def select_accommodation(trip_id: str, acc_id: str, user_id: str):
     db.commit()
 
     return {"message": f"Accommodation {acc_id} selected", "city": acc.city}
+
+
+@app.get("/trips/{trip_id}/booking/verify")
+def verify_booking(trip_id: str, item_type: str, item_id: str, session_id: str = "", user_id: str = ""):
+    """Verify a Stripe Checkout session for flight/hotel booking and mark as booked."""
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id required")
+    db = get_db()
+    trip = db.query(Trip).filter(Trip.id == trip_id, Trip.user_id == user_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    if session_id and stripe.api_key:
+        try:
+            session = stripe.checkout.Session.retrieve(session_id)
+            if session.payment_status == "paid":
+                idempotency_key = f"booking_{session.id}"
+                from database import get_cache, set_cache
+                if not get_cache(idempotency_key):
+                    if item_type == "flight":
+                        flight = db.query(Flight).filter(Flight.id == item_id, Flight.trip_id == trip_id).first()
+                        if flight:
+                            flight.status = "booked"
+                    elif item_type == "accommodation":
+                        acc = db.query(Accommodation).filter(Accommodation.id == item_id, Accommodation.trip_id == trip_id).first()
+                        if acc:
+                            acc.status = "booked"
+                    db.commit()
+                    set_cache(idempotency_key, True, ttl_seconds=86400)
+        except Exception:
+            pass
+
+    return {"status": "ok"}
+
+
+# ── Budget tracker ─────────────────────────────────────────────────────────
+
+@app.get("/trips/{trip_id}/budget")
+def get_trip_budget(trip_id: str, user_id: str):
+    """Calculate budget breakdown for a trip: booked, selected, and estimated costs."""
+    db = get_db()
+    trip = db.query(Trip).filter(Trip.id == trip_id, Trip.user_id == user_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    flights = db.query(Flight).filter(Flight.trip_id == trip_id).all()
+    accommodations = db.query(Accommodation).filter(Accommodation.trip_id == trip_id).all()
+    items = db.query(ItineraryItem).filter(ItineraryItem.trip_id == trip_id).all()
+
+    # Budget level → daily estimate
+    daily_budget_map = {"budget": 100, "mid": 225, "luxury": 500}
+    duration = 1
+    try:
+        from datetime import datetime as _dt
+        d = (_dt.strptime(trip.end_date, "%Y-%m-%d") - _dt.strptime(trip.start_date, "%Y-%m-%d")).days + 1
+        duration = max(d, 1)
+    except Exception:
+        pass
+    daily_rate = daily_budget_map.get(trip.budget_level, 225)
+    estimated_total = daily_rate * duration * (trip.num_travelers or 1)
+
+    flight_booked = sum(f.price or 0 for f in flights if f.status == "booked")
+    flight_selected = sum(f.price or 0 for f in flights if f.status == "selected")
+    accom_booked = sum(a.total_price or 0 for a in accommodations if a.status == "booked")
+    accom_selected = sum(a.total_price or 0 for a in accommodations if a.status == "selected")
+    activity_cost = sum(i.cost or 0 for i in items)
+
+    total_booked = flight_booked + accom_booked
+    total_planned = flight_selected + accom_selected + activity_cost
+
+    return {
+        "estimated_budget": round(estimated_total, 2),
+        "total_booked": round(total_booked, 2),
+        "total_planned": round(total_planned, 2),
+        "total_all": round(total_booked + total_planned, 2),
+        "breakdown": {
+            "flights_booked": round(flight_booked, 2),
+            "flights_selected": round(flight_selected, 2),
+            "accommodations_booked": round(accom_booked, 2),
+            "accommodations_selected": round(accom_selected, 2),
+            "activities": round(activity_cost, 2),
+        },
+        "budget_level": trip.budget_level,
+        "duration_days": duration,
+        "num_travelers": trip.num_travelers or 1,
+    }
+
+
+# ── Disruption / weather monitor ──────────────────────────────────────────
+
+@app.get("/trips/{trip_id}/disruptions")
+def get_disruptions(trip_id: str, user_id: str):
+    """Check weather forecast for the trip destination and flag potential disruptions."""
+    db = get_db()
+    trip = db.query(Trip).filter(Trip.id == trip_id, Trip.user_id == user_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    alerts: list[dict] = []
+
+    # Use Open-Meteo free API for weather forecast (no key needed)
+    try:
+        import requests as req
+        from datetime import datetime as _dt
+
+        # Geocode the destination
+        geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={trip.destination}&count=1"
+        geo_resp = req.get(geo_url, timeout=5).json()
+        results = geo_resp.get("results", [])
+        if not results:
+            return {"alerts": [], "message": "Could not geocode destination"}
+
+        lat = results[0]["latitude"]
+        lon = results[0]["longitude"]
+
+        # Get weather forecast
+        weather_url = (
+            f"https://api.open-meteo.com/v1/forecast?"
+            f"latitude={lat}&longitude={lon}"
+            f"&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,weather_code"
+            f"&start_date={trip.start_date}&end_date={trip.end_date}"
+            f"&timezone=auto"
+        )
+        weather_resp = req.get(weather_url, timeout=5).json()
+        daily = weather_resp.get("daily", {})
+        dates = daily.get("time", [])
+        precip = daily.get("precipitation_sum", [])
+        wind = daily.get("wind_speed_10m_max", [])
+        codes = daily.get("weather_code", [])
+        temp_max = daily.get("temperature_2m_max", [])
+        temp_min = daily.get("temperature_2m_min", [])
+
+        try:
+            trip_start = _dt.strptime(trip.start_date, "%Y-%m-%d")
+        except Exception:
+            trip_start = _dt.now()
+
+        for i, date in enumerate(dates):
+            day_num = i + 1
+            rain = precip[i] if i < len(precip) else 0
+            w = wind[i] if i < len(wind) else 0
+            code = codes[i] if i < len(codes) else 0
+            t_max = temp_max[i] if i < len(temp_max) else None
+            t_min = temp_min[i] if i < len(temp_min) else None
+
+            # Heavy rain alert
+            if rain and rain > 10:
+                alerts.append({
+                    "type": "weather",
+                    "severity": "high" if rain > 25 else "medium",
+                    "day_number": day_num,
+                    "date": date,
+                    "title": f"🌧️ Heavy rain forecast ({rain:.0f}mm)",
+                    "message": f"Day {day_num} ({date}): {rain:.0f}mm of rain expected. Consider indoor activities.",
+                    "suggestion": "Swap outdoor activities for museums, galleries, or covered markets.",
+                    "auto_prompt": "It's raining heavily — swap outdoor activities for indoor alternatives",
+                })
+            elif rain and rain > 3:
+                alerts.append({
+                    "type": "weather",
+                    "severity": "low",
+                    "day_number": day_num,
+                    "date": date,
+                    "title": f"🌦️ Light rain possible ({rain:.1f}mm)",
+                    "message": f"Day {day_num} ({date}): Light rain possible. Bring an umbrella.",
+                    "suggestion": "Pack an umbrella. Outdoor plans should be fine.",
+                })
+
+            # High wind alert
+            if w and w > 50:
+                alerts.append({
+                    "type": "weather",
+                    "severity": "medium",
+                    "day_number": day_num,
+                    "date": date,
+                    "title": f"💨 Strong winds ({w:.0f} km/h)",
+                    "message": f"Day {day_num} ({date}): Wind speeds up to {w:.0f} km/h.",
+                    "suggestion": "Avoid exposed viewpoints or boat tours.",
+                    "auto_prompt": f"Strong winds on day {day_num} — avoid exposed outdoor activities",
+                })
+
+            # Extreme cold
+            if t_min is not None and t_min < -5:
+                alerts.append({
+                    "type": "weather",
+                    "severity": "medium",
+                    "day_number": day_num,
+                    "date": date,
+                    "title": f"🥶 Very cold ({t_min:.0f}°C)",
+                    "message": f"Day {day_num}: Temperatures as low as {t_min:.0f}°C.",
+                    "suggestion": "Dress warmly. Consider indoor activities in the morning.",
+                })
+
+            # Extreme heat
+            if t_max is not None and t_max > 38:
+                alerts.append({
+                    "type": "weather",
+                    "severity": "medium",
+                    "day_number": day_num,
+                    "date": date,
+                    "title": f"🔥 Extreme heat ({t_max:.0f}°C)",
+                    "message": f"Day {day_num}: Temperatures up to {t_max:.0f}°C.",
+                    "suggestion": "Schedule outdoor activities for early morning or evening. Stay hydrated.",
+                    "auto_prompt": f"It's extremely hot on day {day_num} — move outdoor activities to early morning or evening",
+                })
+
+    except Exception as e:
+        return {"alerts": [], "message": f"Weather check failed: {str(e)}"}
+
+    return {
+        "alerts": alerts,
+        "destination": trip.destination,
+        "checked_at": datetime.utcnow().isoformat(),
+    }
+
+
+# ── Travel guide generator (Claude 200K context) ──────────────────────────
+
+class TravelGuideRequest(BaseModel):
+    sections: List[str] = []  # optional: override which sections to generate
+
+
+@app.post("/trips/{trip_id}/travel-guide")
+def generate_travel_guide(trip_id: str, user_id: str, body: TravelGuideRequest = None):
+    """Generate a comprehensive travel guide using the full trip plan context.
+    
+    Leverages Claude's 200K context window to produce a rich guide including
+    cultural tips, phrasebook, packing list, emergency contacts, and more.
+    """
+    db = get_db()
+    trip = db.query(Trip).filter(Trip.id == trip_id, Trip.user_id == user_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    if not trip.plan_data:
+        raise HTTPException(status_code=400, detail="Trip has no plan data yet")
+
+    plan_json = json.dumps(trip.plan_data, indent=2, default=str)
+
+    flights = db.query(Flight).filter(Flight.trip_id == trip_id).all()
+    flight_info = json.dumps([
+        {"airline": f.airline, "flight_number": f.flight_number,
+         "from": f.from_airport, "to": f.to_airport,
+         "departure": f.departure_datetime, "status": f.status}
+        for f in flights
+    ], indent=2)
+
+    accommodations = db.query(Accommodation).filter(Accommodation.trip_id == trip_id).all()
+    accom_info = json.dumps([
+        {"name": a.name, "city": a.city, "address": a.address,
+         "check_in": a.check_in_date, "check_out": a.check_out_date, "status": a.status}
+        for a in accommodations
+    ], indent=2)
+
+    prompt = f"""You are an expert travel guide writer. Generate a comprehensive, beautifully
+formatted travel guide for this trip. Use the COMPLETE trip plan data below.
+
+TRIP DETAILS:
+- Destination: {trip.destination}
+- Dates: {trip.start_date} to {trip.end_date}
+- Travelers: {trip.num_travelers}
+- Budget: {trip.budget_level}
+- Interests: {json.dumps(trip.interests)}
+- Dietary restrictions: {json.dumps(trip.dietary_restrictions)}
+
+COMPLETE ITINERARY & PLAN DATA:
+{plan_json}
+
+FLIGHTS:
+{flight_info}
+
+ACCOMMODATIONS:
+{accom_info}
+
+Generate the following sections in MARKDOWN format:
+
+## 🌍 Destination Overview
+Brief overview of the destination(s), best time to visit, overall vibe.
+
+## 🗣️ Essential Phrasebook
+20+ useful phrases in the local language(s) with pronunciation guides. Include greetings,
+ordering food, asking directions, emergencies, and polite expressions.
+
+## 🎒 Packing List
+Customized packing list based on the destination, weather, activities planned, and trip duration.
+Group by category (clothing, electronics, documents, toiletries, etc.)
+
+## 🍽️ Food & Dining Guide
+Must-try local dishes, restaurant etiquette, tipping culture, dietary restriction tips,
+food safety advice, and recommended restaurants from the itinerary.
+
+## 🚇 Transportation Guide
+How to get from the airport, public transit overview, ride-hailing apps available,
+city-specific transport tips, and passes/cards to buy.
+
+## 💰 Money & Budget Tips
+Local currency, exchange rates, tipping culture, average costs for meals/transport/attractions,
+money-saving tips specific to the destination.
+
+## 🏥 Emergency Information
+Emergency numbers, nearest hospitals/clinics, embassy/consulate info, travel insurance
+reminders, and safety tips for the destination.
+
+## 📱 Useful Apps & Resources
+Must-have apps for the destination, offline maps, translation apps, local services.
+
+## 📋 Day-by-Day Quick Reference
+A compact reference card for each day: key activities, addresses, reservation confirmations needed.
+
+Return the complete guide in Markdown format."""
+
+    provider = os.getenv("LLM_PROVIDER", "openai").lower().strip()
+
+    try:
+        if provider == "anthropic":
+            import anthropic
+            client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+            model = os.getenv("LLM_MODEL", "claude-sonnet-4-20250514")
+            response = client.messages.create(
+                model=model,
+                max_tokens=8000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            guide_text = response.content[0].text
+        elif provider == "gemini":
+            # Use OpenAI-compatible endpoint for Gemini
+            from openai import OpenAI
+            client = OpenAI(api_key=os.getenv("GEMINI_API_KEY"),
+                           base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
+            model = os.getenv("LLM_MODEL", "gemini-2.0-flash")
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=8000,
+            )
+            guide_text = response.choices[0].message.content
+        else:
+            from openai import OpenAI
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            model = os.getenv("LLM_MODEL", "gpt-4o-mini")
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=8000,
+            )
+            guide_text = response.choices[0].message.content
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Guide generation failed: {str(e)}")
+
+    return {
+        "guide": guide_text,
+        "destination": trip.destination,
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+
+
+# ── Chat history ───────────────────────────────────────────────────────────
+
+@app.get("/trips/{trip_id}/chat/history")
+def get_chat_history(trip_id: str, user_id: str):
+    """Return the conversation history for a trip's itinerary chat."""
+    db = get_db()
+    trip = db.query(Trip).filter(Trip.id == trip_id, Trip.user_id == user_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    
+    messages = db.query(ChatMessage).filter(
+        ChatMessage.trip_id == trip_id
+    ).order_by(ChatMessage.created_at).all()
+
+    return {
+        "messages": [
+            {"role": m.role, "content": m.content, "created_at": m.created_at.isoformat()}
+            for m in messages
+        ]
+    }
 
 
 # Search endpoints

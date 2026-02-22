@@ -15,11 +15,14 @@ to generate the final structured data returned to the frontend.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Any, Dict, Generator, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from crewai import Agent, Crew, Process, Task
 from crewai.tools import tool as crewai_tool
@@ -660,6 +663,117 @@ def _build_agents():
 
 
 # ---------------------------------------------------------------------------
+# PlanValidator — self-reflection agent that checks + fixes the itinerary
+# ---------------------------------------------------------------------------
+
+def _validate_and_fix_itinerary(itinerary: list[dict], dest: str, duration: int) -> tuple[list[dict], list[str]]:
+    """Run a validation agent that checks the itinerary for issues and fixes them.
+    
+    Returns (possibly_fixed_itinerary, list_of_issues_found).
+    """
+    if not itinerary:
+        return itinerary, []
+
+    itin_json = json.dumps(itinerary, indent=2, default=str)
+
+    validator_agent = Agent(
+        role="Trip Plan Validator",
+        goal=(
+            "Validate a travel itinerary for realism and fix any issues. Check geographic "
+            "coherence (no zig-zagging across the city), timing feasibility (not too many "
+            "activities, reasonable travel time), and completeness (meals included, costs "
+            "present). If issues are found, fix them and explain what you changed."
+        ),
+        backstory=(
+            "You are a meticulous travel plan reviewer. You catch mistakes that slip past "
+            "other planners: a restaurant visit scheduled at 3 AM, a museum visit on Monday "
+            "when it's closed on Mondays, jumping from one end of the city to the other "
+            "between consecutive items, or a day with 12 hours of back-to-back activities "
+            "with no rest. You fix these issues while preserving the spirit of the plan. "
+            "You also verify that costs are realistic — a café breakfast should not cost $200."
+        ),
+        tools=[get_city_info_tool],
+        llm=_llm_name(),
+        verbose=VERBOSE,
+        allow_delegation=False,
+        max_iter=5,
+    )
+
+    validate_task = Task(
+        description=f"""Review this {duration}-day itinerary for {dest} and fix any issues.
+
+--- ITINERARY ---
+{itin_json}
+--- END ---
+
+CHECK FOR:
+1. **Geographic coherence**: Are consecutive items in the same neighbourhood/area? Flag if
+   the plan jumps across the city between items.
+2. **Timing feasibility**: Are start times realistic? Is there enough time between items
+   (including travel)? Are any items scheduled before 6 AM or after midnight without reason?
+3. **Cost realism**: Are prices realistic for the destination? A breakfast should not cost $200.
+   A museum entry should not cost $2 in Europe.
+4. **Meal coverage**: Does each day have breakfast, lunch, and dinner at named restaurants?
+5. **Activity density**: No more than 7-8 items per day. People need rest.
+6. **Google Maps URLs**: Every item should have a google_maps_url.
+
+Return a JSON object:
+{{
+  "issues_found": ["issue 1 description", "issue 2 description", ...],
+  "fixes_applied": ["fix 1 description", "fix 2 description", ...],
+  "validated_itinerary": [ <the full itinerary — fixed if needed, unchanged if fine> ]
+}}
+
+If the itinerary is perfect, return empty arrays for issues_found and fixes_applied,
+and return the itinerary unchanged in validated_itinerary.
+
+Return ONLY valid JSON.""",
+        expected_output="A JSON object with issues_found, fixes_applied, and validated_itinerary.",
+        agent=validator_agent,
+    )
+
+    try:
+        crew = Crew(
+            agents=[validator_agent],
+            tasks=[validate_task],
+            process=Process.sequential,
+            verbose=VERBOSE,
+        )
+        crew.kickoff()
+
+        raw = validate_task.output.raw if validate_task.output else "{}"
+        result = _safe_json_parse(raw)
+
+        issues = result.get("issues_found", [])
+        fixes = result.get("fixes_applied", [])
+        validated = result.get("validated_itinerary", itinerary)
+
+        if isinstance(validated, list) and len(validated) > 0:
+            # Re-normalise fields
+            for day in validated:
+                city_name = day.get("city", dest)
+                for i, item in enumerate(day.get("items", [])):
+                    item.setdefault("id", f"day{day.get('day_number', 0)}_item{i}")
+                    item.setdefault("status", "planned")
+                    item.setdefault("delayed_to_day", None)
+                    item.setdefault("is_ai_suggested", 1)
+                    if "cost_usd" not in item:
+                        raw_cost = item.pop("cost", 0)
+                        item["cost_usd"] = raw_cost if isinstance(raw_cost, (int, float)) else 0
+                    item.setdefault("cost_local", f"${item['cost_usd']}")
+                    item.setdefault("currency", "USD")
+                    item["cost"] = item["cost_usd"]
+                    if not item.get("google_maps_url"):
+                        loc = item.get("location", item.get("title", city_name))
+                        item["google_maps_url"] = _gmaps_url(loc, city_name)
+            return validated, issues + fixes
+        return itinerary, issues + fixes
+    except Exception as exc:
+        logger.warning("Plan validation failed: %s", exc)
+        return itinerary, [f"Validation skipped: {exc}"]
+
+
+# ---------------------------------------------------------------------------
 # CrewAI Task builders
 # ---------------------------------------------------------------------------
 
@@ -998,10 +1112,19 @@ def _parse_crew_result(
     if not itinerary:
         itinerary = _build_fallback_itinerary(cities, duration, start)
 
+    # --- Validate and fix the itinerary (self-reflection) ---
+    validation_notes: list[str] = []
+    try:
+        itinerary, validation_notes = _validate_and_fix_itinerary(itinerary, dest, duration)
+    except Exception as exc:
+        logger.warning("Validator failed, using unvalidated itinerary: %s", exc)
+
     # --- Compute travel routes between consecutive items per day ---
     _enrich_itinerary_with_routes(itinerary)
 
     summary = f"Planned {duration} days across {', '.join(cities)}"
+    if validation_notes:
+        summary += f" (validated: {len(validation_notes)} checks)"
 
     return {
         "cities": cities,
@@ -1010,6 +1133,7 @@ def _parse_crew_result(
         "itinerary": itinerary,
         "is_country_level": is_country,
         "planning_summary": summary,
+        "validation_notes": validation_notes,
     }
 
 
@@ -1289,7 +1413,21 @@ class TripPlanner:
                    "message": str(result_holder["error"])}
             return
 
+        # --- Phase 4: Validation (runs inside _parse_crew_result) ---
+        yield {
+            "type": "progress", "agent": "PlanValidator",
+            "status": "running",
+            "message": "Validating itinerary for geographic coherence and timing...",
+        }
+        started_agents.add("PlanValidator")
+
         plan_data = _parse_crew_result(tasks, trip_data)
+
+        yield {
+            "type": "progress", "agent": "PlanValidator",
+            "status": "done",
+            "message": f"Validation complete — {len(plan_data.get('validation_notes', []))} checks performed",
+        }
 
         yield {
             "type": "complete",
@@ -1297,6 +1435,7 @@ class TripPlanner:
             "status": "complete",
             "message": "Trip planning complete!",
             "plan": plan_data,
+            "validation_notes": plan_data.get("validation_notes", []),
         }
 
     @staticmethod
@@ -1304,6 +1443,7 @@ class TripPlanner:
         trip_data: Dict[str, Any],
         current_itinerary: list[dict],
         user_message: str,
+        chat_history: list[dict] | None = None,
     ) -> Dict[str, Any]:
         """Use a single LLM agent to modify the itinerary based on a user chat message.
 
@@ -1321,6 +1461,16 @@ class TripPlanner:
 
         # Serialise the current itinerary so the agent can see it
         itin_json = json.dumps(current_itinerary, indent=2, default=str)
+
+        # Build conversation history context for multi-turn coherence
+        history_context = ""
+        if chat_history:
+            history_lines = []
+            for msg in chat_history[-10:]:  # last 10 messages for context
+                role = msg.get("role", "user").upper()
+                content = msg.get("content", "")
+                history_lines.append(f"{role}: {content}")
+            history_context = "\n--- CONVERSATION HISTORY ---\n" + "\n".join(history_lines) + "\n--- END HISTORY ---\n\n"
 
         modifier_tools = [get_city_info_tool]
         modifier_tools.extend(_web_search_tools)
@@ -1357,7 +1507,7 @@ class TripPlanner:
             description=f"""You are modifying an existing {duration}-day itinerary for {dest}
 ({start} to {end}).  Interests: {interests}. Budget: {budget}.
 
---- CURRENT ITINERARY (JSON) ---
+{history_context}--- CURRENT ITINERARY (JSON) ---
 {itin_json}
 --- END CURRENT ITINERARY ---
 

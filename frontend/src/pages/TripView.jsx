@@ -92,6 +92,13 @@ export default function TripView() {
   const [chatLoading, setChatLoading] = useState(false)
   const [travelPrefs, setTravelPrefs] = useState(null)
 
+  // New: budget tracker, disruption alerts, travel guide
+  const [budget, setBudget] = useState(null)
+  const [alerts, setAlerts] = useState([])
+  const [guideText, setGuideText] = useState('')
+  const [guideLoading, setGuideLoading] = useState(false)
+  const [showGuide, setShowGuide] = useState(false)
+
   useEffect(() => {
     loadData()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -108,10 +115,28 @@ export default function TripView() {
       if (itinData.days?.length) {
         setSelectedDay(itinData.days[0].day_number)
       }
+
+      // Load budget + disruptions in background
+      api.getTripBudget(tripId, user.id).then(setBudget).catch(() => {})
+      api.getDisruptions(tripId, user.id).then((d) => setAlerts(d.alerts || [])).catch(() => {})
     } catch (err) {
       setError(err.message)
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function handleGenerateGuide() {
+    setGuideLoading(true)
+    try {
+      const result = await api.generateTravelGuide(tripId, user.id)
+      setGuideText(result.guide)
+      setShowGuide(true)
+    } catch (err) {
+      setGuideText(`⚠️ Failed to generate guide: ${err.message}`)
+      setShowGuide(true)
+    } finally {
+      setGuideLoading(false)
     }
   }
 
@@ -196,6 +221,89 @@ export default function TripView() {
           </a>
         </header>
       )}
+
+      {/* Budget tracker */}
+      {budget && (
+        <div className="budget-tracker">
+          <div className="budget-tracker__header">
+            <h3 className="budget-tracker__title">💰 Budget Tracker</h3>
+            <span className="budget-tracker__level">{budget.budget_level} · {budget.duration_days}d · {budget.num_travelers} traveler{budget.num_travelers > 1 ? 's' : ''}</span>
+          </div>
+          <div className="budget-tracker__bar-wrap">
+            <div className="budget-tracker__bar">
+              <div
+                className="budget-tracker__bar-booked"
+                style={{ width: `${Math.min((budget.total_booked / budget.estimated_budget) * 100, 100)}%` }}
+                title={`Booked: $${budget.total_booked}`}
+              />
+              <div
+                className="budget-tracker__bar-planned"
+                style={{ width: `${Math.min((budget.total_planned / budget.estimated_budget) * 100, 100 - (budget.total_booked / budget.estimated_budget) * 100)}%` }}
+                title={`Planned: $${budget.total_planned}`}
+              />
+            </div>
+            <span className="budget-tracker__label">
+              ${budget.total_all.toLocaleString()} / ${budget.estimated_budget.toLocaleString()}
+            </span>
+          </div>
+          <div className="budget-tracker__breakdown">
+            <span>✈️ Flights: ${budget.breakdown.flights_booked + budget.breakdown.flights_selected}</span>
+            <span>🏨 Hotels: ${budget.breakdown.accommodations_booked + budget.breakdown.accommodations_selected}</span>
+            <span>🎭 Activities: ${budget.breakdown.activities}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Disruption alerts */}
+      {alerts.length > 0 && (
+        <div className="disruption-alerts">
+          <h3 className="disruption-alerts__title">⚠️ Weather Alerts</h3>
+          <div className="disruption-alerts__list">
+            {alerts.slice(0, 5).map((alert, i) => (
+              <div key={i} className={`disruption-alert disruption-alert--${alert.severity}`}>
+                <div className="disruption-alert__info">
+                  <span className="disruption-alert__title">{alert.title}</span>
+                  <span className="disruption-alert__msg">{alert.message}</span>
+                </div>
+                {alert.auto_prompt && (
+                  <button
+                    className="disruption-alert__adapt-btn"
+                    onClick={() => handleChatSend(alert.auto_prompt)}
+                  >
+                    🔄 Auto-adapt
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Travel guide section */}
+      <div className="travel-guide-section">
+        <button
+          className="travel-guide-section__btn"
+          onClick={handleGenerateGuide}
+          disabled={guideLoading}
+        >
+          {guideLoading ? '⚙️ Generating guide...' : '📖 Generate Travel Guide'}
+        </button>
+        {showGuide && (
+          <div className="travel-guide-section__content">
+            <button className="travel-guide-section__close" onClick={() => setShowGuide(false)}>✕</button>
+            <div className="travel-guide-section__text">
+              {guideText.split('\n').map((line, i) => {
+                if (line.startsWith('## ')) return <h2 key={i}>{line.slice(3)}</h2>
+                if (line.startsWith('### ')) return <h3 key={i}>{line.slice(4)}</h3>
+                if (line.startsWith('- ')) return <li key={i}>{line.slice(2)}</li>
+                if (line.startsWith('**') && line.endsWith('**')) return <p key={i}><strong>{line.slice(2, -2)}</strong></p>
+                if (line.trim() === '') return <br key={i} />
+                return <p key={i}>{line}</p>
+              })}
+            </div>
+          </div>
+        )}
+      </div>
 
       {error && <div className="trip-view__error">{error}</div>}
 

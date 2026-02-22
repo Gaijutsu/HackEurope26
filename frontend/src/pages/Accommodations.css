@@ -33,6 +33,17 @@
   margin-bottom: 24px;
 }
 
+.accom-page__success {
+  padding: 14px 18px;
+  font-size: 0.85rem;
+  color: #00b894;
+  background: rgba(0, 184, 148, 0.06);
+  border: 1px solid rgba(0, 184, 148, 0.15);
+  border-radius: var(--radius-sm);
+  margin-bottom: 24px;
+  font-weight: 600;
+}
+
 .accom-page__empty {
   text-align: center;
   padding: 60px 24px;

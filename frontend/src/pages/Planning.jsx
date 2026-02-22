@@ -11,6 +11,7 @@ const AGENTS = [
   { key: 'FlightFinder', icon: '✈️', name: 'Flight Finder', desc: 'Searching for the best flights' },
   { key: 'AccommodationFinder', icon: '🏨', name: 'Accommodation Finder', desc: 'Finding perfect places to stay' },
   { key: 'ItineraryPlanner', icon: '📅', name: 'Itinerary Planner', desc: 'Building your day-by-day plan' },
+  { key: 'PlanValidator', icon: '✅', name: 'Plan Validator', desc: 'Validating coherence, timing & costs' },
 ]
 
 const AGENT_ORDER = {
@@ -19,6 +20,7 @@ const AGENT_ORDER = {
   FlightFinder: 3,
   AccommodationFinder: 4,
   ItineraryPlanner: 5,
+  PlanValidator: 6,
 }
 
 const pageVariants = {
@@ -91,12 +93,12 @@ export default function Planning() {
     const idx = AGENT_ORDER[agentName] || 0
 
     if (status === 'running') {
-      const pct = Math.min(Math.round(((idx - 1) / 5) * 100), 95)
+      const pct = Math.min(Math.round(((idx - 1) / 6) * 100), 95)
       setProgress(pct)
       setStatusText(`🔄 ${agentName}: ${message}`)
       setAgentStates((prev) => ({ ...prev, [agentName]: 'running' }))
     } else if (status === 'done') {
-      const pct = Math.min(Math.round((idx / 5) * 100), 95)
+      const pct = Math.min(Math.round((idx / 6) * 100), 95)
       setProgress(pct)
       setStatusText(`✅ ${agentName}: ${message}`)
       setAgentStates((prev) => ({ ...prev, [agentName]: 'done' }))
