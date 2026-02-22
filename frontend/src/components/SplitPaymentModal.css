@@ -1,0 +1,275 @@
+.split-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.split-modal {
+  background: white;
+  border-radius: 16px;
+  padding: 2rem;
+  max-width: 480px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  position: relative;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+.split-modal__close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: #666;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+
+.split-modal__close:hover {
+  background: #f0f0f0;
+}
+
+.split-modal__title {
+  margin: 0 0 0.25rem;
+  font-size: 1.5rem;
+  color: #1a1a2e;
+}
+
+.split-modal__subtitle {
+  margin: 0 0 1.5rem;
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.split-modal__summary {
+  background: #f8f9fa;
+  border-radius: 12px;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.split-summary__row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #e9ecef;
+}
+
+.split-summary__row:last-child {
+  border-bottom: none;
+}
+
+.split-summary__row--highlight {
+  background: #e3f2fd;
+  margin: 0.5rem -0.5rem;
+  padding: 0.75rem 0.5rem;
+  border-radius: 8px;
+  font-size: 1.1rem;
+}
+
+.split-summary__row--highlight strong {
+  color: #1976d2;
+}
+
+.split-modal__section-title {
+  font-size: 1rem;
+  margin: 0 0 1rem;
+  color: #333;
+}
+
+.split-modal__names {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.split-name__row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.split-name__row label {
+  font-size: 0.8rem;
+  color: #666;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.split-name__row input {
+  padding: 0.75rem;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  font-size: 1rem;
+  transition: border-color 0.2s;
+}
+
+.split-name__row input:focus {
+  outline: none;
+  border-color: #1976d2;
+}
+
+.split-modal__error {
+  color: #d32f2f;
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
+}
+
+.split-modal__btn {
+  width: 100%;
+  padding: 0.875rem;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.split-modal__btn--primary {
+  background: #1976d2;
+  color: white;
+}
+
+.split-modal__btn--primary:hover:not(:disabled) {
+  background: #1565c0;
+}
+
+.split-modal__btn--primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.split-modal__btn--secondary {
+  background: #f0f0f0;
+  color: #333;
+  margin-top: 1rem;
+}
+
+.split-modal__btn--secondary:hover {
+  background: #e0e0e0;
+}
+
+.split-modal__links {
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.split-modal__hint {
+  color: #666;
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
+}
+
+.split-links__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.split-link__item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: #f8f9fa;
+  border-radius: 10px;
+  flex-wrap: wrap;
+}
+
+.split-link__info {
+  flex: 1;
+  min-width: 120px;
+}
+
+.split-link__info strong {
+  display: block;
+  color: #1a1a2e;
+}
+
+.split-link__status {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  padding: 0.125rem 0.5rem;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.split-link__status--pending {
+  background: #fff3e0;
+  color: #e65100;
+}
+
+.split-link__status--paid {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.split-link__amount {
+  font-weight: 600;
+  color: #1976d2;
+  font-size: 1.1rem;
+}
+
+.split-link__copy-btn {
+  padding: 0.5rem 1rem;
+  background: #1976d2;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.split-link__copy-btn:hover {
+  background: #1565c0;
+}
+
+.split-link__paid {
+  color: #2e7d32;
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.split-link__offline {
+  color: #666;
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+@media (max-width: 480px) {
+  .split-modal {
+    padding: 1.5rem;
+    margin: 0.5rem;
+  }
+  
+  .split-link__item {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  
+  .split-link__copy-btn {
+    width: 100%;
+  }
+}

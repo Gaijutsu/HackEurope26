@@ -1,4 +1,4 @@
-"""FastAPI Backend - Hackathon Edition with CrewAI Agents"""
+"""FastAPI Backend - Hackathon Edition with Direct LLM Agents (litellm)"""
 import os
 import json
 import uuid
@@ -21,7 +21,7 @@ from jose import JWTError, jwt
 
 from icalendar import Calendar, Event as ICalEvent
 
-from database import init_db, get_db, User, Trip, ItineraryItem, Flight, Accommodation, City, ChatMessage
+from database import init_db, get_db, User, Trip, ItineraryItem, Flight, Accommodation, City, ChatMessage, PaymentSplit
 from agents import planning_agent
 
 # Initialize database
@@ -30,7 +30,7 @@ init_db()
 # FastAPI app
 app = FastAPI(
     title="Agentic Trip Planner API",
-    description="Hackathon version - Multi-agent trip planning with CrewAI",
+    description="Hackathon version - Multi-agent trip planning with litellm",
     version="2.0.0"
 )
 
@@ -107,6 +107,20 @@ class PlanResponse(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+
+
+class SplitPaymentRequest(BaseModel):
+    item_type: str  # 'flight' or 'accommodation'
+    item_id: str
+    payer_name: str
+    payer_email: Optional[str] = None
+
+
+class CreateSplitRequest(BaseModel):
+    item_type: str
+    item_id: str
+    payer_names: List[str]  # List of traveler names
+    payer_emails: Optional[List[str]] = None
 
 # Helper functions
 def hash_password(password: str) -> str:
@@ -298,6 +312,33 @@ async def stripe_webhook(request: FastAPIRequest):
             if acc:
                 acc.status = "booked"
                 db.commit()
+        elif metadata.get("split_id"):
+            # Split payment completed
+            db = get_db()
+            split = db.query(PaymentSplit).filter(PaymentSplit.id == metadata.get("split_id")).first()
+            if split and split.status != "paid":
+                split.status = "paid"
+                split.paid_at = datetime.utcnow()
+                db.commit()
+                
+                # Check if all shares for this item are paid
+                all_splits = db.query(PaymentSplit).filter(
+                    PaymentSplit.item_type == split.item_type,
+                    PaymentSplit.item_id == split.item_id,
+                ).all()
+                
+                if all(s.status == "paid" for s in all_splits):
+                    # Mark the item as booked
+                    if split.item_type == "flight":
+                        item = db.query(Flight).filter(Flight.id == split.item_id).first()
+                        if item:
+                            item.status = "booked"
+                            db.commit()
+                    elif split.item_type == "accommodation":
+                        item = db.query(Accommodation).filter(Accommodation.id == split.item_id).first()
+                        if item:
+                            item.status = "booked"
+                            db.commit()
         else:
             # Legacy: credit purchase
             user_id = metadata.get("user_id")
@@ -435,7 +476,7 @@ def delete_trip(trip_id: str, user_id: str):
     return {"message": "Trip deleted successfully"}
 
 # ---------------------------------------------------------------------------
-# Planning endpoints  (CrewAI powered)
+# Planning endpoints  (litellm direct)
 # ---------------------------------------------------------------------------
 
 def _save_plan_to_db(db, trip, plan_data: dict):
@@ -1290,6 +1331,231 @@ def get_trip_budget(trip_id: str, user_id: str):
     }
 
 
+# ── Payment Splitting ─────────────────────────────────────────────────────
+
+@app.post("/trips/{trip_id}/splits/create")
+def create_split_payments(trip_id: str, user_id: str, body: CreateSplitRequest):
+    """Create split payment sessions for an item (flight/accommodation).
+    
+    Divides the cost equally among the number of travelers on the trip.
+    Returns checkout URLs for each person to pay their share.
+    """
+    db = get_db()
+    trip = db.query(Trip).filter(Trip.id == trip_id, Trip.user_id == user_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    
+    num_travelers = trip.num_travelers or 1
+    
+    # Get the item being split
+    if body.item_type == "flight":
+        item = db.query(Flight).filter(Flight.id == body.item_id, Flight.trip_id == trip_id).first()
+        if not item:
+            raise HTTPException(status_code=404, detail="Flight not found")
+        total_cost = item.price or 0
+        description = f"Flight {item.flight_number}: {item.from_airport} → {item.to_airport}"
+    elif body.item_type == "accommodation":
+        item = db.query(Accommodation).filter(Accommodation.id == body.item_id, Accommodation.trip_id == trip_id).first()
+        if not item:
+            raise HTTPException(status_code=404, detail="Accommodation not found")
+        total_cost = item.total_price or 0
+        description = f"{item.name} — {item.city}"
+    else:
+        raise HTTPException(status_code=400, detail="Invalid item_type")
+    
+    if num_travelers != len(body.payer_names):
+        return {
+            "warning": f"Number of payers ({len(body.payer_names)}) doesn't match trip travelers ({num_travelers})",
+        }
+    
+    share_amount = round(total_cost / num_travelers, 2)
+    share_cents = int(share_amount * 100)
+    
+    # Create a PaymentSplit record and checkout for each person
+    splits = []
+    emails = body.payer_emails or [None] * len(body.payer_names)
+    
+    for i, name in enumerate(body.payer_names):
+        # Check if split already exists for this payer
+        existing = db.query(PaymentSplit).filter(
+            PaymentSplit.trip_id == trip_id,
+            PaymentSplit.item_type == body.item_type,
+            PaymentSplit.item_id == body.item_id,
+            PaymentSplit.payer_name == name,
+        ).first()
+        
+        if existing and existing.status == "paid":
+            splits.append({
+                "split_id": existing.id,
+                "payer_name": name,
+                "share_amount": existing.share_amount,
+                "status": "paid",
+                "checkout_url": None,
+                "message": "Already paid"
+            })
+            continue
+        
+        if existing and existing.stripe_session_id:
+            # Reuse existing session
+            splits.append({
+                "split_id": existing.id,
+                "payer_name": name,
+                "share_amount": share_amount,
+                "status": existing.status,
+                "checkout_url": f"https://checkout.stripe.com/pay/{existing.stripe_session_id}" if existing.stripe_session_id else None,
+            })
+            continue
+        
+        # Create new split record
+        split = PaymentSplit(
+            trip_id=trip_id,
+            item_type=body.item_type,
+            item_id=body.item_id,
+            payer_name=name,
+            payer_email=emails[i] if i < len(emails) else None,
+            total_amount=total_cost,
+            share_amount=share_amount,
+            currency=item.currency or "USD",
+            status="pending"
+        )
+        db.add(split)
+        db.commit()
+        db.refresh(split)
+        
+        checkout_url = None
+        
+        if stripe.api_key:
+            try:
+                session = stripe.checkout.Session.create(
+                    payment_method_types=["card"],
+                    line_items=[{
+                        "price_data": {
+                            "currency": (item.currency or "USD").lower(),
+                            "unit_amount": share_cents,
+                            "product_data": {
+                                "name": f"{description}",
+                                "description": f"Split payment for {name} (1/{num_travelers})",
+                            },
+                        },
+                        "quantity": 1,
+                    }],
+                    mode="payment",
+                    success_url=f"{FRONTEND_URL}/trips/{trip_id}/splits/success?split_id={split.id}&session_id={{CHECKOUT_SESSION_ID}}",
+                    cancel_url=f"{FRONTEND_URL}/trips/{trip_id}/{body.item_type}s",
+                    metadata={
+                        "user_id": user_id,
+                        "trip_id": trip_id,
+                        "split_id": split.id,
+                        "item_type": body.item_type,
+                        "item_id": body.item_id,
+                        "payer_name": name,
+                    },
+                )
+                split.stripe_session_id = session.id
+                db.commit()
+                checkout_url = session.url
+            except Exception as e:
+                # Continue without Stripe - will use fallback
+                pass
+        
+        splits.append({
+            "split_id": split.id,
+            "payer_name": name,
+            "share_amount": share_amount,
+            "status": split.status,
+            "checkout_url": checkout_url,
+        })
+    
+    return {
+        "item_type": body.item_type,
+        "item_id": body.item_id,
+        "total_cost": total_cost,
+        "num_travelers": num_travelers,
+        "share_amount": share_amount,
+        "splits": splits,
+    }
+
+
+@app.get("/trips/{trip_id}/splits")
+def get_split_payments(trip_id: str, user_id: str):
+    """Get all split payments for a trip with their status."""
+    db = get_db()
+    trip = db.query(Trip).filter(Trip.id == trip_id, Trip.user_id == user_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    
+    splits = db.query(PaymentSplit).filter(PaymentSplit.trip_id == trip_id).all()
+    
+    # Group by item
+    items = {}
+    for s in splits:
+        key = f"{s.item_type}:{s.item_id}"
+        if key not in items:
+            items[key] = {
+                "item_type": s.item_type,
+                "item_id": s.item_id,
+                "total_amount": s.total_amount,
+                "shares": []
+            }
+        items[key]["shares"].append({
+            "split_id": s.id,
+            "payer_name": s.payer_name,
+            "share_amount": s.share_amount,
+            "status": s.status,
+            "paid_at": s.paid_at.isoformat() if s.paid_at else None,
+        })
+    
+    return {
+        "trip_id": trip_id,
+        "num_travelers": trip.num_travelers or 1,
+        "items": list(items.values()),
+    }
+
+
+@app.get("/trips/{trip_id}/splits/success")
+def split_payment_success(trip_id: str, split_id: str, session_id: str = ""):
+    """Verify a split payment was successful."""
+    db = get_db()
+    split = db.query(PaymentSplit).filter(PaymentSplit.id == split_id, PaymentSplit.trip_id == trip_id).first()
+    if not split:
+        raise HTTPException(status_code=404, detail="Split payment not found")
+    
+    if stripe.api_key and session_id:
+        try:
+            session = stripe.checkout.Session.retrieve(session_id)
+            if session.payment_status == "paid":
+                split.status = "paid"
+                split.paid_at = datetime.utcnow()
+                
+                # Check if all shares for this item are paid
+                all_splits = db.query(PaymentSplit).filter(
+                    PaymentSplit.item_type == split.item_type,
+                    PaymentSplit.item_id == split.item_id,
+                ).all()
+                
+                if all(s.status == "paid" for s in all_splits):
+                    # Mark the item as booked
+                    if split.item_type == "flight":
+                        item = db.query(Flight).filter(Flight.id == split.item_id).first()
+                        if item:
+                            item.status = "booked"
+                    elif split.item_type == "accommodation":
+                        item = db.query(Accommodation).filter(Accommodation.id == split.item_id).first()
+                        if item:
+                            item.status = "booked"
+                
+                db.commit()
+        except Exception:
+            pass
+    else:
+        # Fallback - mark as paid
+        split.status = "paid"
+        split.paid_at = datetime.utcnow()
+        db.commit()
+    
+    return {"status": split.status, "payer_name": split.payer_name, "amount": split.share_amount}
+
+
 # ── Disruption / weather monitor ──────────────────────────────────────────
 
 @app.get("/trips/{trip_id}/disruptions")
@@ -1418,7 +1684,7 @@ def get_disruptions(trip_id: str, user_id: str):
     }
 
 
-# ── Travel guide generator (CrewAI agent crew with web search) ─────────────
+# ── Travel guide generator (direct litellm — no CrewAI overhead) ────────────
 
 class TravelGuideRequest(BaseModel):
     sections: List[str] = []  # optional: override which sections to generate
@@ -1426,13 +1692,13 @@ class TravelGuideRequest(BaseModel):
 
 @app.post("/trips/{trip_id}/travel-guide")
 def generate_travel_guide(trip_id: str, user_id: str, body: TravelGuideRequest = None):
-    """Generate a comprehensive travel guide using a CrewAI agent crew with Tavily web search.
+    """Generate a comprehensive travel guide using direct litellm calls (2 LLM calls).
 
-    Two agents collaborate:
-    1. TravelResearcher — searches the web for up-to-date local info (transit apps,
-       payment methods, tipping culture, visa requirements, safety, etc.)
-    2. GuideWriter — synthesises everything into a polished Markdown travel guide.
+    1. Research call — gathers practical travel info (visa, transit, money, safety…)
+    2. Guide writing call — synthesises into polished Markdown travel guide
     """
+    import litellm
+
     db = get_db()
     trip = db.query(Trip).filter(Trip.id == trip_id, Trip.user_id == user_id).first()
     if not trip:
@@ -1459,89 +1725,44 @@ def generate_travel_guide(trip_id: str, user_id: str, body: TravelGuideRequest =
     ], indent=2)
 
     origin = trip.plan_data.get("origin_city", trip.origin_city or "")
-
-    # --- Build CrewAI agent crew ---
-    from crewai import Agent as CrewAgent, Crew as CrewCrew, Process as CrewProcess, Task as CrewTask
-
     llm_model = planning_agent._llm_name()
 
-    # Web search tools (Tavily preferred, Serper fallback)
-    search_tools = list(planning_agent._web_search_tools)
-    if planning_agent._scrape_tool:
-        search_tools.append(planning_agent._scrape_tool)
-
-    researcher = CrewAgent(
-        role="Travel Research Specialist",
-        goal=(
-            f"Research up-to-date, practical travel information for visiting "
-            f"{trip.destination} from {origin or 'abroad'}. Focus on what a real "
-            f"traveller needs to know BEFORE and DURING their trip."
-        ),
-        backstory=(
-            "You are a meticulous travel researcher who finds the most current, practical "
-            "information for travellers. You search the web for real, verified details — "
-            "not generic advice. You focus on local apps, payment methods, transit cards, "
-            "tipping norms, visa/entry requirements, safety alerts, and cultural etiquette "
-            "that tourists often miss."
-        ),
-        tools=search_tools,
-        llm=llm_model,
-        verbose=False,
-        allow_delegation=False,
-        max_iter=8,
-    )
-
-    writer = CrewAgent(
-        role="Travel Guide Writer",
-        goal=(
-            f"Write a comprehensive, beautifully formatted Markdown travel guide for a "
-            f"{trip.budget_level}-budget trip to {trip.destination} "
-            f"({trip.start_date} to {trip.end_date})."
-        ),
-        backstory=(
-            "You are an award-winning travel writer who creates guides that are both "
-            "informative and a joy to read. You weave practical tips with cultural insight, "
-            "always cite specific names (apps, transit cards, restaurants), and format "
-            "everything in clean Markdown with emoji section headers."
-        ),
-        tools=[],
-        llm=llm_model,
-        verbose=False,
-        allow_delegation=False,
-        max_iter=5,
-    )
-
-    research_task = CrewTask(
-        description=f"""Research the following topics for a trip to {trip.destination}
+    # --- Call 1: Research ---
+    research_prompt = f"""Research the following topics for a trip to {trip.destination}
 (from {origin or 'abroad'}, dates {trip.start_date} to {trip.end_date}).
 
-Search the web for CURRENT, SPECIFIC information on each topic:
+Provide CURRENT, SPECIFIC information on each topic:
 
-1. **Visa & Entry**: Do travellers from the origin country need a visa? Any e-visa or
-   visa-on-arrival options? Required documents? COVID/health requirements?
-2. **Local Transit Apps**: What apps should travellers install BEFORE arriving?
-   (e.g. metro apps, ride-hailing like Grab/Bolt/Uber, bike-share, train booking apps)
-3. **Payment & Money**: How do locals pay? Is cash or card dominant? Contactless?
-   Best cards to use? Where to exchange money? ATM tips? Apple/Google Pay acceptance?
-4. **Tipping Culture**: What is expected? Restaurants, taxis, hotels, tours?
-   Is it offensive or expected? Typical percentages.
-5. **Local SIM / Connectivity**: Best tourist SIM cards or eSIM providers?
-   Cost? Where to buy? WiFi availability.
-6. **Safety & Scams**: Current safety situation, common tourist scams,
-   areas to avoid, emergency numbers.
-7. **Cultural Etiquette**: Dress codes, religious site rules, greeting customs,
-   table manners, photography rules, common faux pas.
-8. **Language Basics**: What language(s) spoken? English proficiency level?
-   Essential phrases for tourists.
+1. **Visa & Entry**: Visa requirements, e-visa options, required documents, health requirements.
+2. **Local Transit Apps**: Must-install apps (metro, ride-hailing, bike-share, train booking).
+3. **Payment & Money**: Cash vs card, contactless, best cards, ATM tips, Apple/Google Pay.
+4. **Tipping Culture**: Expected amounts for restaurants, taxis, hotels, tours.
+5. **Local SIM / Connectivity**: Best tourist SIM/eSIM providers, costs, WiFi availability.
+6. **Safety & Scams**: Safety situation, common scams, areas to avoid, emergency numbers.
+7. **Cultural Etiquette**: Dress codes, greeting customs, table manners, photography rules.
+8. **Language Basics**: Languages spoken, English proficiency, essential tourist phrases.
 
-Return your findings as a detailed report with all specific names, prices, and links.""",
-        expected_output="A detailed research report with specific, current travel information.",
-        agent=researcher,
-    )
+Return a detailed report with specific names, prices, and links."""
 
-    guide_task = CrewTask(
-        description=f"""Using the research from the Travel Research Specialist AND the trip
-plan data below, write a comprehensive Markdown travel guide.
+    try:
+        research_resp = litellm.completion(
+            model=llm_model,
+            messages=[
+                {"role": "system", "content": "You are a meticulous travel researcher who finds current, practical information for travellers. Focus on specific names, prices, and actionable details."},
+                {"role": "user", "content": research_prompt},
+            ],
+            temperature=0.5,
+        )
+        research_text = research_resp.choices[0].message.content
+    except Exception as e:
+        research_text = f"Research unavailable: {e}"
+
+    # --- Call 2: Write the guide ---
+    guide_prompt = f"""Using the research below AND the trip plan data, write a comprehensive
+Markdown travel guide.
+
+RESEARCH:
+{research_text[:4000]}
 
 TRIP DETAILS:
 - Destination: {trip.destination}
@@ -1553,7 +1774,7 @@ TRIP DETAILS:
 - Dietary restrictions: {json.dumps(trip.dietary_restrictions)}
 
 ITINERARY:
-{plan_json}
+{plan_json[:3000]}
 
 FLIGHTS:
 {flight_info}
@@ -1564,57 +1785,30 @@ ACCOMMODATIONS:
 Write the guide with these sections:
 
 ## 🌍 Destination Overview
-Brief overview, best time to visit, overall vibe.
-
 ## 🛂 Visa & Entry Requirements
-Visa requirements from the origin country, documents needed, health requirements.
-
 ## 📱 Essential Apps to Install
-Must-have apps with SPECIFIC names: transit, maps, ride-hailing, food delivery,
-translation, payment apps. Include download links where possible.
-
 ## 💳 Payment & Money Guide
-Local currency, how locals pay, tipping culture with specific percentages,
-ATM tips, best exchange options, contactless/Apple Pay availability.
-
-## 🗣️ Essential Phrasebook
-20+ useful phrases in the local language(s) with pronunciation.
-
+## 🗣️ Essential Phrasebook (20+ phrases with pronunciation)
 ## 🎒 Packing List
-Customised for the destination, weather, and planned activities.
-
 ## 🍽️ Food & Dining Guide
-Must-try dishes, restaurant etiquette, tipping, dietary restriction tips.
-
 ## 🚇 Transportation Guide
-Airport transfers, transit cards to buy, ride-hailing apps, city-specific tips.
-
 ## 🌐 SIM Card & Connectivity
-Best eSIM/SIM options, costs, WiFi availability.
-
 ## ⚠️ Safety & Cultural Tips
-Scams to watch for, cultural etiquette, dress codes, emergency numbers.
-
 ## 📋 Day-by-Day Quick Reference
-Compact card for each day: key activities, addresses, what to bring.
 
-Return the complete guide in Markdown format. Be SPECIFIC — always name real apps,
-real transit cards, real prices.""",
-        expected_output="A complete Markdown travel guide with all sections.",
-        agent=writer,
-        context=[research_task],
-    )
+Be SPECIFIC — always name real apps, real transit cards, real prices.
+Return the complete guide in Markdown format."""
 
     try:
-        crew = CrewCrew(
-            agents=[researcher, writer],
-            tasks=[research_task, guide_task],
-            process=CrewProcess.sequential,
-            verbose=False,
+        guide_resp = litellm.completion(
+            model=llm_model,
+            messages=[
+                {"role": "system", "content": "You are an award-winning travel writer. You create guides that are informative and a joy to read, with specific names, prices, and clean Markdown formatting with emoji section headers."},
+                {"role": "user", "content": guide_prompt},
+            ],
+            temperature=0.7,
         )
-        crew.kickoff()
-
-        guide_text = guide_task.output.raw if guide_task.output else "Guide generation produced no output."
+        guide_text = guide_resp.choices[0].message.content
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Guide generation failed: {str(e)}")
 
@@ -1730,18 +1924,16 @@ def health_check():
     from agents import _llm_name
     return {
         "status": "ok",
-        "version": "2.0.0",
-        "engine": "CrewAI",
+        "version": "3.0.0",
+        "engine": "litellm-direct",
         "llm": _llm_name(),
         "llm_provider": os.getenv("LLM_PROVIDER", "openai"),
-        "agents": [
-            "DestinationResearcher",
-            "CitySelector",
-            "LocalExpert",
-            "FlightFinder",
-            "AccommodationFinder",
-            "LocalTravelAdvisor",
-            "ItineraryPlanner",
+        "pipeline": [
+            "ResearchAndCitySelection (1 LLM call)",
+            "FlightSearch (direct API)",
+            "HotelSearch (direct API)",
+            "ItineraryGeneration (1 LLM call)",
+            "Validation (1 LLM call)",
         ],
     }
 

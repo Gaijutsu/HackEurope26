@@ -92,12 +92,13 @@ export default function TripView() {
   const [chatLoading, setChatLoading] = useState(false)
   const [travelPrefs, setTravelPrefs] = useState(null)
 
-  // New: budget tracker, disruption alerts, travel guide
+  // New: budget tracker, disruption alerts, travel guide, split payments
   const [budget, setBudget] = useState(null)
   const [alerts, setAlerts] = useState([])
   const [guideText, setGuideText] = useState('')
   const [guideLoading, setGuideLoading] = useState(false)
   const [showGuide, setShowGuide] = useState(false)
+  const [splits, setSplits] = useState(null)
 
   useEffect(() => {
     loadData()
@@ -116,9 +117,10 @@ export default function TripView() {
         setSelectedDay(itinData.days[0].day_number)
       }
 
-      // Load budget + disruptions in background
+      // Load budget + disruptions + splits in background
       api.getTripBudget(tripId, user.id).then(setBudget).catch(() => {})
       api.getDisruptions(tripId, user.id).then((d) => setAlerts(d.alerts || [])).catch(() => {})
+      api.getSplitPayments(tripId, user.id).then(setSplits).catch(() => {})
     } catch (err) {
       setError(err.message)
     } finally {
@@ -250,6 +252,43 @@ export default function TripView() {
             <span>✈️ Flights: ${budget.breakdown.flights_booked + budget.breakdown.flights_selected}</span>
             <span>🏨 Hotels: ${budget.breakdown.accommodations_booked + budget.breakdown.accommodations_selected}</span>
             <span>🎭 Activities: ${budget.breakdown.activities}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Split Payments Summary */}
+      {splits && splits.items?.length > 0 && (
+        <div className="split-summary">
+          <h3 className="split-summary__title">💰 Split Payments</h3>
+          <div className="split-summary__list">
+            {splits.items.map((item, idx) => {
+              const paidShares = item.shares.filter(s => s.status === 'paid').length
+              const totalShares = item.shares.length
+              const allPaid = paidShares === totalShares
+              return (
+                <div key={idx} className={`split-summary__item ${allPaid ? 'split-summary__item--complete' : ''}`}>
+                  <div className="split-summary__item-header">
+                    <span className="split-summary__item-type">
+                      {item.item_type === 'flight' ? '✈️' : '🏨'} {item.item_type}
+                    </span>
+                    <span className="split-summary__item-progress">
+                      {paidShares}/{totalShares} paid
+                    </span>
+                  </div>
+                  <div className="split-summary__shares">
+                    {item.shares.map((share, sIdx) => (
+                      <div key={sIdx} className={`split-summary__share split-summary__share--${share.status}`}>
+                        <span className="split-summary__share-name">{share.payer_name}</span>
+                        <span className="split-summary__share-amount">${share.share_amount}</span>
+                        <span className={`split-summary__share-status split-summary__share-status--${share.status}`}>
+                          {share.status}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
           </div>
         </div>
       )}

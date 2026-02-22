@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { useAuth } from '../contexts/AuthContext'
 import * as api from '../api'
 import TripNav from '../components/TripNav'
+import SplitPaymentModal from '../components/SplitPaymentModal'
 import './Accommodations.css'
 
 const pageVariants = {
@@ -21,10 +22,23 @@ export default function Accommodations() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [bookingMsg, setBookingMsg] = useState('')
+  const [splitModalOpen, setSplitModalOpen] = useState(false)
+  const [selectedAcc, setSelectedAcc] = useState(null)
+  const [trip, setTrip] = useState(null)
 
   useEffect(() => {
     loadAccommodations()
+    loadTrip()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadTrip() {
+    try {
+      const data = await api.getTrip(tripId, user.id)
+      setTrip(data)
+    } catch (err) {
+      console.error('Failed to load trip:', err)
+    }
+  }
 
   // Handle Stripe redirect: verify booking on return
   useEffect(() => {
@@ -92,6 +106,11 @@ export default function Accommodations() {
     }
   }
 
+  function openSplitModal(acc) {
+    setSelectedAcc(acc)
+    setSplitModalOpen(true)
+  }
+
   return (
     <motion.div
       className="accom-page"
@@ -109,6 +128,19 @@ export default function Accommodations() {
       {bookingMsg && <div className="accom-page__success">{bookingMsg}</div>}
       {error && <div className="accom-page__error">{error}</div>}
 
+      <SplitPaymentModal
+        isOpen={splitModalOpen}
+        onClose={() => setSplitModalOpen(false)}
+        tripId={tripId}
+        userId={user.id}
+        itemType="accommodation"
+        itemId={selectedAcc?.id}
+        itemName={selectedAcc ? `${selectedAcc.name} — ${selectedAcc.city}` : ''}
+        totalCost={selectedAcc?.total_price}
+        numTravelers={trip?.num_travelers || 1}
+        currency={selectedAcc?.currency}
+      />
+
       {!loading && accommodations.length === 0 ? (
         <div className="accom-page__empty">
           <p>No accommodations found. Start planning to generate options.</p>
@@ -121,6 +153,8 @@ export default function Accommodations() {
               acc={acc}
               onBook={() => handleBook(acc.id)}
               onSelect={() => handleSelect(acc.id, acc.city)}
+              onSplit={() => openSplitModal(acc)}
+              numTravelers={trip?.num_travelers || 1}
             />
           ))}
         </div>
@@ -129,7 +163,7 @@ export default function Accommodations() {
   )
 }
 
-function AccomCard({ acc, onBook, onSelect }) {
+function AccomCard({ acc, onBook, onSelect, onSplit, numTravelers }) {
   const isBooked = acc.status === 'booked'
   const isSelected = acc.status === 'selected'
 
@@ -179,6 +213,15 @@ function AccomCard({ acc, onBook, onSelect }) {
             <button className="accom-card__action accom-card__action--book" onClick={onBook}>
               Book
             </button>
+            {numTravelers > 1 && (
+              <button 
+                className="accom-card__action accom-card__action--split"
+                onClick={onSplit}
+                title="Split payment between travelers"
+              >
+                💰 Split ({numTravelers})
+              </button>
+            )}
             {acc.booking_url && (
               <a
                 href={acc.booking_url}

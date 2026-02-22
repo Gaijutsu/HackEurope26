@@ -125,6 +125,26 @@ class ChatMessage(Base):
     trip = relationship("Trip")
 
 
+class PaymentSplit(Base):
+    __tablename__ = "payment_splits"
+    
+    id = Column(String, primary_key=True, default=generate_id)
+    trip_id = Column(String, ForeignKey("trips.id"))
+    item_type = Column(String)  # 'flight', 'accommodation', 'activity'
+    item_id = Column(String)    # ID of the item being split
+    payer_name = Column(String)  # Name of the person paying this share
+    payer_email = Column(String, nullable=True)
+    total_amount = Column(Float)  # Full cost before split
+    share_amount = Column(Float)  # This person's portion
+    currency = Column(String, default='USD')
+    stripe_session_id = Column(String, nullable=True)
+    status = Column(String, default='pending')  # pending, paid, failed
+    paid_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    trip = relationship("Trip")
+
+
 class City(Base):
     __tablename__ = "cities"
     
