@@ -245,8 +245,10 @@ export async function selectAccommodation(tripId, accId, userId) {
 
 // ── Pinterest (mood boards) ──────────────────────────────────────────────
 
-export async function getPinterestImages(city, country) {
-  const url = `${API_URL}/pinterest?city=${encodeURIComponent(city)}&country=${encodeURIComponent(country)}`
+export async function getPinterestImages(city, country, region = '') {
+  const params = new URLSearchParams({ city, country })
+  if (region) params.set('region', region)
+  const url = `${API_URL}/pinterest?${params}`
   const res = await fetch(url)
   if (!res.ok) throw new Error('Failed to fetch mood boards')
   return res.json()

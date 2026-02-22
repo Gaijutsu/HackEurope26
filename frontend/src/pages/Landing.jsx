@@ -130,7 +130,9 @@ export default function Landing() {
         setVotes({})
 
         try {
-            const url = `http://localhost:8000/pinterest?city=${encodeURIComponent(selectedCity.city)}&country=${encodeURIComponent(selectedCity.country)}`
+            const params = new URLSearchParams({ city: selectedCity.city, country: selectedCity.country })
+            if (selectedCity.region) params.set('region', selectedCity.region)
+            const url = `http://localhost:8000/pinterest?${params}`
             const response = await fetch(url)
             const data = await response.json()
             setMoodBoards(data.map((imageUrl, index) => ({ id: index, image: imageUrl })))

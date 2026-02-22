@@ -1101,6 +1101,7 @@ def select_accommodation(trip_id: str, acc_id: str, user_id: str):
 async def pinterest_images(
     city: str = Query(..., description="City name"),
     country: str = Query(..., description="Country name"),
+    region: str = Query("", description="Region/state name"),
 ):
     """Fetch Pinterest-style travel images for a city."""
     from pinterest_dl import PinterestDL
@@ -1111,7 +1112,8 @@ async def pinterest_images(
         image_files = sorted(os.listdir(download_dir))
         return [f"/pinterest/{batch_id}/{fname}" for fname in image_files]
 
-    query = f"photos of {city} {country}"
+    parts = [city] + ([region] if region else []) + [country]
+    query = f"photos of {' '.join(parts)}"
     batch_id = uuid.uuid4().hex[:8]
     download_dir = os.path.join(PINTEREST_DIR, batch_id)
     os.makedirs(download_dir, exist_ok=True)
