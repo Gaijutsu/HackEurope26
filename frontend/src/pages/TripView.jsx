@@ -34,6 +34,46 @@ function StatusTag({ status }) {
   return <span className={`itin-item__tag ${c.cls}`}>{c.label}</span>
 }
 
+function TravelRoute({ travelInfo }) {
+  if (!travelInfo || !travelInfo.display) return null
+
+  const walking = travelInfo.walking || {}
+  const transit = travelInfo.transit || {}
+  const recommended = travelInfo.recommended || 'walking'
+
+  return (
+    <div className="travel-route">
+      <div className="travel-route__line" />
+      <div className="travel-route__badges">
+        {/* Primary recommended badge */}
+        <span className={`travel-route__badge travel-route__badge--${recommended}`}>
+          {travelInfo.display}
+        </span>
+
+        {/* Secondary option (the non-recommended one) */}
+        {recommended === 'walking' && transit.duration_text && (
+          <span className="travel-route__badge travel-route__badge--alt">
+            🚇 {transit.duration_text} ({transit.transit_name || 'transit'})
+          </span>
+        )}
+        {recommended === 'transit' && walking.duration_text && (
+          <span className="travel-route__badge travel-route__badge--alt">
+            🚶 {walking.duration_text}
+          </span>
+        )}
+
+        {/* Distance */}
+        {walking.distance_text && (
+          <span className="travel-route__distance">
+            📏 {walking.distance_text}
+          </span>
+        )}
+      </div>
+      <div className="travel-route__line" />
+    </div>
+  )
+}
+
 export default function TripView() {
   const { tripId } = useParams()
   const { user } = useAuth()
@@ -181,12 +221,18 @@ export default function TripView() {
                   {items.map((item, i) => (
                     <motion.div
                       key={item.id}
-                      className="itin-item"
+                      className="itin-item-wrapper"
                       variants={itemVariants}
                       initial="hidden"
                       animate="visible"
                       custom={i}
                     >
+                      {/* Travel route badge between items */}
+                      {i > 0 && item.travel_info && item.travel_info.display && (
+                        <TravelRoute travelInfo={item.travel_info} />
+                      )}
+
+                      <div className="itin-item">
                       <div className="itin-item__time">
                         <span className="itin-item__time-text">{item.start_time}</span>
                         <span className="itin-item__duration">{item.duration_minutes}m</span>
@@ -259,6 +305,7 @@ export default function TripView() {
                           </div>
                         )}
                       </div>
+                      </div>{/* /itin-item */}
                     </motion.div>
                   ))}
                 </AnimatePresence>
