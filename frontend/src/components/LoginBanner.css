@@ -78,6 +78,38 @@
     background: rgba(232, 196, 200, 0.1);
 }
 
+.login-banner__credits {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--accent-deep);
+    padding: 5px 14px;
+    border: 1.5px solid rgba(232, 196, 200, 0.35);
+    border-radius: var(--radius-xl);
+    background: linear-gradient(135deg, rgba(232, 196, 200, 0.18) 0%, rgba(232, 196, 200, 0.08) 100%);
+    cursor: pointer;
+    font-family: var(--font-body);
+    transition:
+        background var(--transition-fast),
+        border-color var(--transition-fast),
+        box-shadow var(--transition-fast),
+        transform var(--transition-fast);
+    white-space: nowrap;
+}
+
+.login-banner__credits:hover {
+    background: linear-gradient(135deg, rgba(232, 196, 200, 0.28) 0%, rgba(232, 196, 200, 0.15) 100%);
+    border-color: var(--accent);
+    box-shadow: var(--shadow-glow);
+    transform: translateY(-1px);
+}
+
+.login-banner__credits svg {
+    flex-shrink: 0;
+}
+
 /* ── Sign-in trigger ── */
 .login-banner__trigger {
     display: flex;

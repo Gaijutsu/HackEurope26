@@ -12,6 +12,7 @@ import Planning from './pages/Planning'
 import TripView from './pages/TripView'
 import Flights from './pages/Flights'
 import Accommodations from './pages/Accommodations'
+import BuyCredits from './pages/BuyCredits'
 import './App.css'
 
 // Group trip sub-routes under one key so tab switches are instant (no exit→enter animation)
@@ -26,7 +27,7 @@ function App() {
   const { isAuthenticated } = useAuth()
 
   // Hide navbar on landing and auth pages for cleaner UX
-  const hideNavbar = ['/', '/login', '/register'].includes(location.pathname)
+  const hideNavbar = ['/', '/login', '/register', '/credits', '/credits/success'].includes(location.pathname) || location.pathname.startsWith('/plan')
 
   return (
     <>
@@ -38,6 +39,8 @@ function App() {
           <Route path="/plan" element={<PlanForm />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/credits" element={<BuyCredits />} />
+          <Route path="/credits/success" element={<BuyCredits />} />
 
           {/* Protected routes */}
           <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />

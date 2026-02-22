@@ -257,3 +257,27 @@ export async function getPinterestImages(city, country) {
 export async function healthCheck() {
   return apiFetch('/health')
 }
+
+// ── Credits ───────────────────────────────────────────────────────────────
+
+export async function getCredits(userId) {
+  return apiFetch(`/credits?user_id=${encodeURIComponent(userId)}`)
+}
+
+export async function adjustCredits(userId, amount) {
+  return apiFetch(`/credits/adjust?user_id=${encodeURIComponent(userId)}`, {
+    method: 'POST',
+    body: JSON.stringify({ amount }),
+  })
+}
+
+export async function createCheckoutSession(userId, packageId) {
+  return apiFetch(`/credits/checkout?user_id=${encodeURIComponent(userId)}`, {
+    method: 'POST',
+    body: JSON.stringify({ package: packageId }),
+  })
+}
+
+export async function verifyCheckoutSuccess(userId, sessionId) {
+  return apiFetch(`/credits/success?user_id=${encodeURIComponent(userId)}&session_id=${encodeURIComponent(sessionId)}`)
+}

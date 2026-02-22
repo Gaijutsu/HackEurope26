@@ -46,3 +46,6 @@ icalendar>=5.0.0
 
 # Pinterest image scraping
 pinterest-dl>=0.7.0
+
+# Stripe payments
+stripe>=7.0.0

@@ -15,6 +15,15 @@ export function AuthProvider({ children }) {
   })
 
   const [token, setToken] = useState(() => localStorage.getItem('token') || null)
+  const [credits, setCredits] = useState(() => {
+    try {
+      const stored = localStorage.getItem('user')
+      const parsed = stored ? JSON.parse(stored) : null
+      return parsed?.credits ?? 0
+    } catch {
+      return 0
+    }
+  })
 
   // Persist to localStorage when changed
   useEffect(() => {
@@ -33,9 +42,37 @@ export function AuthProvider({ children }) {
     }
   }, [user])
 
+  const refreshCredits = useCallback(async () => {
+    if (!user?.id) return
+    try {
+      const res = await fetch(`${API_URL}/credits?user_id=${encodeURIComponent(user.id)}`)
+      if (res.ok) {
+        const data = await res.json()
+        setCredits(data.credits)
+        // Also update user object so localStorage stays in sync
+        setUser((prev) => prev ? { ...prev, credits: data.credits } : prev)
+      } else if (res.status === 404) {
+        // User no longer exists in DB (e.g. DB was recreated) — force logout
+        setToken(null)
+        setUser(null)
+        setCredits(0)
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
+      }
+    } catch {
+      // silently ignore
+    }
+  }, [user?.id])
+
+  // Refresh credits on mount and when user changes
+  useEffect(() => {
+    if (user?.id) refreshCredits()
+  }, [user?.id, refreshCredits])
+
   const loginUser = useCallback((authData) => {
     setToken(authData.access_token)
     setUser(authData.user)
+    setCredits(authData.user?.credits ?? 0)
   }, [])
 
   const login = useCallback(async (email, password) => {
@@ -50,6 +87,7 @@ export function AuthProvider({ children }) {
     }
     setToken(data.access_token)
     setUser(data.user)
+    setCredits(data.user?.credits ?? 0)
     return data.user
   }, [])
 
@@ -65,12 +103,14 @@ export function AuthProvider({ children }) {
     }
     setToken(data.access_token)
     setUser(data.user)
+    setCredits(data.user?.credits ?? 0)
     return data.user
   }, [])
 
   const logout = useCallback(() => {
     setToken(null)
     setUser(null)
+    setCredits(0)
     localStorage.removeItem('token')
     localStorage.removeItem('user')
   }, [])
@@ -78,7 +118,7 @@ export function AuthProvider({ children }) {
   const isAuthenticated = !!user && !!token
 
   return (
-    <AuthContext.Provider value={{ user, token, isAuthenticated, loginUser, login, register, logout }}>
+    <AuthContext.Provider value={{ user, token, credits, isAuthenticated, loginUser, login, register, logout, refreshCredits }}>
       {children}
     </AuthContext.Provider>
   )

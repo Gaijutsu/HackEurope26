@@ -181,3 +181,79 @@ HackEurope26/
 - No real booking integration
 - SQLite database (not production-ready)
 - Session-based auth (simplified for hackathon)
+
+## Stripe Integration (Trip Credits)
+
+Users have **trip credits** — each credit allows planning one AI-powered trip. Credits are displayed in the navbar/banner on every page and can be purchased via Stripe Checkout.
+
+### Credit Packages
+
+| Package | Price | Per Credit |
+|---------|-------|------------|
+| 1 credit | $1.99 | $1.99 |
+| 5 credits | $7.99 | $1.60 |
+| 10 credits | $11.99 | $1.20 |
+
+New users start with **3 free credits**.
+
+### Setup (~15 min)
+
+1. **Create a Stripe account** at [dashboard.stripe.com](https://dashboard.stripe.com) — you'll be in test mode by default.
+
+2. **Copy your test secret key** from **Developers → API keys** (starts with `sk_test_...`) and add to `.env`:
+
+   ```bash
+   STRIPE_SECRET_KEY=sk_test_xxxxxxxxxxxxxx
+   FRONTEND_URL=http://localhost:5173
+   ```
+
+3. **Set up local webhook forwarding** with the [Stripe CLI](https://docs.stripe.com/stripe-cli):
+
+   ```bash
+   # Install (Linux)
+   curl -s https://packages.stripe.dev/api/security/keypair/stripe-cli-gpg/public | gpg --dearmor | sudo tee /usr/share/keyrings/stripe.gpg
+   echo "deb [signed-by=/usr/share/keyrings/stripe.gpg] https://packages.stripe.dev/stripe-cli-debian-local stable main" | sudo tee /etc/apt/sources.list.d/stripe.list
+   sudo apt update && sudo apt install stripe
+
+   # macOS: brew install stripe/stripe-cli/stripe
+
+   # Login & forward
+   stripe login
+   stripe listen --forward-to localhost:8000/credits/webhook
+   ```
+
+   Copy the webhook signing secret (`whsec_...`) and add to `.env`:
+
+   ```bash
+   STRIPE_WEBHOOK_SECRET=whsec_xxxxxxxxxxxxxx
+   ```
+
+4. **Test a purchase** — use Stripe's test card `4242 4242 4242 4242` with any future expiry and any CVC.
+
+### Without Stripe Keys
+
+If `STRIPE_SECRET_KEY` is not set, the checkout endpoint **grants credits directly** as a hackathon fallback — no real payment is needed to demo the full flow.
+
+### Secret Cheat Codes
+
+On the landing page destination input:
+- Type **`AddCredits`** and submit → adds 5 credits (must be logged in)
+- Type **`RemoveCredits`** and submit → removes 5 credits (capped at 0)
+
+### Credit-Related API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/credits` | GET | Get current credit balance |
+| `/credits/adjust` | POST | Add/remove credits (secret codes) |
+| `/credits/checkout` | POST | Create Stripe Checkout session |
+| `/credits/webhook` | POST | Stripe webhook handler |
+| `/credits/success` | GET | Verify completed checkout |
+
+### Environment Variables
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `STRIPE_SECRET_KEY` | No | Stripe secret key (fallback: free credits) |
+| `STRIPE_WEBHOOK_SECRET` | No | Webhook signature verification |
+| `FRONTEND_URL` | No | Redirect after checkout (default: `http://localhost:5173`) |

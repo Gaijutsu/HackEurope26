@@ -1,0 +1,233 @@
+.credits-page {
+  min-height: 100vh;
+  background: var(--bg-primary);
+  padding: 60px 24px;
+}
+
+.credits-page__container {
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+.credits-page__header {
+  text-align: center;
+  margin-bottom: 40px;
+}
+
+.credits-page__title {
+  font-family: var(--font-display);
+  font-size: 2.2rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--text-primary) 0%, var(--accent-deep) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 8px;
+}
+
+.credits-page__subtitle {
+  font-size: 1rem;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  margin-bottom: 20px;
+}
+
+.credits-page__balance {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 28px;
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: 100px;
+  box-shadow: var(--shadow-sm);
+}
+
+.credits-page__balance svg {
+  color: var(--accent-deep);
+}
+
+.credits-page__balance-count {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--accent-deep);
+  font-family: var(--font-display);
+}
+
+.credits-page__balance-label {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+}
+
+.credits-page__success {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px 24px;
+  background: rgba(72, 187, 120, 0.08);
+  border: 1px solid rgba(72, 187, 120, 0.25);
+  border-radius: var(--radius-md);
+  color: #276749;
+  font-size: 0.9rem;
+  font-weight: 500;
+  margin-bottom: 32px;
+  font-family: var(--font-body);
+}
+
+.credits-page__success svg {
+  color: #48bb78;
+  flex-shrink: 0;
+}
+
+.credits-page__login-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 14px 32px;
+  font-size: 1rem;
+  font-weight: 600;
+  color: white;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-deep) 100%);
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-family: var(--font-body);
+  margin-top: 16px;
+}
+
+/* ── Package grid ── */
+.credits-page__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+}
+
+@media (max-width: 720px) {
+  .credits-page__grid {
+    grid-template-columns: 1fr;
+    max-width: 360px;
+    margin: 0 auto;
+  }
+}
+
+/* ── Credit card ── */
+.credits-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 36px 24px 28px;
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.credits-card--popular {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-md), 0 0 0 1px rgba(232, 196, 200, 0.15);
+}
+
+.credits-card--best {
+  border-color: var(--accent-deep);
+  box-shadow: var(--shadow-md), 0 0 0 1px rgba(180, 130, 140, 0.2);
+}
+
+.credits-card__badge {
+  position: absolute;
+  top: -12px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 16px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: white;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-deep) 100%);
+  border-radius: 100px;
+  white-space: nowrap;
+  font-family: var(--font-body);
+}
+
+.credits-card__badge--best {
+  background: linear-gradient(135deg, var(--accent-deep) 0%, #8b5e6b 100%);
+}
+
+.credits-card__credits {
+  font-family: var(--font-display);
+  font-size: 3rem;
+  font-weight: 700;
+  color: var(--accent-deep);
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.credits-card__label {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  margin-bottom: 16px;
+}
+
+.credits-card__price {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  margin-bottom: 4px;
+}
+
+.credits-card__per-credit {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-family: var(--font-body);
+  margin-bottom: 20px;
+}
+
+.credits-card__btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 12px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: white;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-deep) 100%);
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-family: var(--font-body);
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.credits-card__btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-lg), var(--shadow-glow);
+}
+
+.credits-card__btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.credits-card__spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: credits-spin 0.7s linear infinite;
+}
+
+@keyframes credits-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -8,6 +8,8 @@ import shutil
 from dotenv import load_dotenv
 load_dotenv()
 
+import stripe
+
 from fastapi import FastAPI, HTTPException, Depends, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
@@ -44,6 +46,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Stripe configuration
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+
+CREDIT_PACKAGES = {
+    "1": {"credits": 1, "price_cents": 199, "label": "1 Trip Credit"},
+    "5": {"credits": 5, "price_cents": 799, "label": "5 Trip Credits"},
+    "10": {"credits": 10, "price_cents": 1199, "label": "10 Trip Credits"},
+}
 
 # Security
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -145,7 +158,8 @@ def register(user: UserCreate):
         "user": {
             "id": db_user.id,
             "email": db_user.email,
-            "name": db_user.name
+            "name": db_user.name,
+            "credits": db_user.credits
         }
     }
 
@@ -168,9 +182,151 @@ def login(user: UserLogin):
         "user": {
             "id": db_user.id,
             "email": db_user.email,
-            "name": db_user.name
+            "name": db_user.name,
+            "credits": db_user.credits
         }
     }
+
+# ── Credits endpoints ──────────────────────────────────────────────────────
+
+@app.get("/credits")
+def get_credits(user_id: str):
+    """Return the current credit balance for a user."""
+    db = get_db()
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"credits": user.credits}
+
+
+class AdjustCreditsRequest(BaseModel):
+    amount: int  # positive to add, negative to remove
+
+
+@app.post("/credits/adjust")
+def adjust_credits(body: AdjustCreditsRequest, user_id: str):
+    """Secret endpoint to add/remove credits (used by hidden destination codes)."""
+    db = get_db()
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.credits = max(0, user.credits + body.amount)
+    db.commit()
+    db.refresh(user)
+    return {"credits": user.credits}
+
+
+class CheckoutRequest(BaseModel):
+    package: str  # '1', '5', or '10'
+
+
+@app.post("/credits/checkout")
+def create_checkout_session(body: CheckoutRequest, user_id: str):
+    """Create a Stripe Checkout session for purchasing trip credits."""
+    pkg = CREDIT_PACKAGES.get(body.package)
+    if not pkg:
+        raise HTTPException(status_code=400, detail="Invalid package")
+
+    # Always verify the user exists first
+    db = get_db()
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if not stripe.api_key:
+        # If Stripe is not configured, grant credits directly (hackathon fallback)
+        user.credits += pkg["credits"]
+        db.commit()
+        db.refresh(user)
+        return {"fallback": True, "credits": user.credits}
+
+    try:
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[{
+                "price_data": {
+                    "currency": "usd",
+                    "unit_amount": pkg["price_cents"],
+                    "product_data": {"name": pkg["label"]},
+                },
+                "quantity": 1,
+            }],
+            mode="payment",
+            success_url=f"{FRONTEND_URL}/credits/success?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{FRONTEND_URL}/credits",
+            metadata={"user_id": user_id, "credits": str(pkg["credits"])},
+        )
+        return {"url": session.url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Stripe error: {str(e)}")
+
+
+from fastapi import Request as FastAPIRequest
+
+
+@app.post("/credits/webhook")
+async def stripe_webhook(request: FastAPIRequest):
+    """Handle Stripe webhook for completed checkout sessions."""
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+
+    if STRIPE_WEBHOOK_SECRET:
+        try:
+            event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
+        except (ValueError, stripe.error.SignatureVerificationError):
+            raise HTTPException(status_code=400, detail="Invalid webhook signature")
+    else:
+        event = json.loads(payload)
+
+    if event.get("type") == "checkout.session.completed":
+        session = event["data"]["object"]
+        user_id = session.get("metadata", {}).get("user_id")
+        credits_str = session.get("metadata", {}).get("credits", "0")
+        if user_id:
+            db = get_db()
+            user = db.query(User).filter(User.id == user_id).first()
+            if user:
+                user.credits += int(credits_str)
+                db.commit()
+
+    return {"status": "ok"}
+
+
+@app.get("/credits/success")
+def credits_success(session_id: str = "", user_id: str = ""):
+    """Verify a completed checkout session and grant credits if not already granted.
+
+    This replaces the need for webhooks — when the user is redirected back from
+    Stripe Checkout, we retrieve the session from Stripe's API, check the
+    metadata, and grant credits if the payment succeeded.
+    """
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id required")
+    db = get_db()
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # If we have a session_id and Stripe is configured, verify & grant credits
+    if session_id and stripe.api_key:
+        try:
+            session = stripe.checkout.Session.retrieve(session_id)
+            if session.payment_status == "paid":
+                # Use the session ID as an idempotency key to avoid double-granting
+                idempotency_key = f"stripe_session_{session.id}"
+                from database import get_cache, set_cache
+                if not get_cache(idempotency_key):
+                    credits_to_add = int(session.metadata.get("credits", "0"))
+                    if credits_to_add > 0:
+                        user.credits += credits_to_add
+                        db.commit()
+                        db.refresh(user)
+                    set_cache(idempotency_key, True, ttl_seconds=86400)
+        except Exception:
+            pass  # Fall through — return current balance regardless
+
+    return {"credits": user.credits}
+
 
 # Trip endpoints
 @app.get("/trips")
@@ -388,6 +544,16 @@ def stream_planning(trip_id: str, user_id: str):
         raise HTTPException(status_code=404, detail="Trip not found")
 
     # If already completed, return the cached plan as a single SSE event
+    if trip.planning_status == "completed" and trip.plan_data:
+        pass  # no credit charge for cached plans
+    elif trip.planning_status != "in_progress":
+        # Deduct 1 credit for a new planning run
+        planner_user = db.query(User).filter(User.id == user_id).first()
+        if not planner_user or planner_user.credits < 1:
+            raise HTTPException(status_code=402, detail="Not enough trip credits. Purchase more to plan a trip.")
+        planner_user.credits -= 1
+        db.commit()
+
     if trip.planning_status == "completed" and trip.plan_data:
         def _cached():
             event = {"type": "complete", "agent": "Orchestrator",

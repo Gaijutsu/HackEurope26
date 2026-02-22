@@ -4,6 +4,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import MoodBoardCard from '../components/MoodBoardCard'
 import CityAutocomplete from '../components/CityAutocomplete'
 import LoginBanner from '../components/LoginBanner'
+import { useAuth } from '../contexts/AuthContext'
+import * as api from '../api'
 import './Landing.css'
 
 const containerVariants = {
@@ -55,12 +57,15 @@ export default function Landing() {
     const [isLoadingImages, setIsLoadingImages] = useState(false)
     const [isGeneratingVibe, setIsGeneratingVibe] = useState(false)
     const [moodBoards, setMoodBoards] = useState([])
+    const [creditMessage, setCreditMessage] = useState('')
     // Map of index -> 'upvoted' | 'downvoted' | 'neither'
     const [votes, setVotes] = useState({})
     const navigate = useNavigate()
+    const { user, refreshCredits } = useAuth()
 
     const handleDestinationChange = useCallback((val) => {
         setDestination(val)
+        setCreditMessage('')
         // Any manual typing invalidates — must re-select from dropdown
         setCityValid(false)
         setSelectedCity(null)
@@ -71,14 +76,52 @@ export default function Landing() {
         }
     }, [searched])
 
+    // Handle secret credit cheat codes
+    const handleSecretCode = useCallback(async (code) => {
+        if (!user?.id) {
+            setCreditMessage('Please sign in first to use credit codes.')
+            return true
+        }
+        const upper = code.trim()
+        if (upper === 'AddCredits') {
+            try {
+                const res = await api.adjustCredits(user.id, 5)
+                await refreshCredits()
+                setCreditMessage(`✨ 5 credits added! You now have ${res.credits} credits.`)
+            } catch {
+                setCreditMessage('Failed to add credits.')
+            }
+            setDestination('')
+            return true
+        }
+        if (upper === 'RemoveCredits') {
+            try {
+                const res = await api.adjustCredits(user.id, -5)
+                await refreshCredits()
+                setCreditMessage(`🔻 5 credits removed. You now have ${res.credits} credits.`)
+            } catch {
+                setCreditMessage('Failed to remove credits.')
+            }
+            setDestination('')
+            return true
+        }
+        return false
+    }, [user?.id, refreshCredits])
+
     const handleCitySelect = useCallback((entry) => {
         setCityValid(true)
         setSelectedCity(entry)
         setDestination(entry.city)
     }, [])
 
+    const isSecretCode = destination.trim() === 'AddCredits' || destination.trim() === 'RemoveCredits'
+
     const handleSearch = async (e) => {
         e.preventDefault()
+
+        // Check secret credit codes first
+        if (await handleSecretCode(destination)) return
+
         if (!destination.trim() || !cityValid || !selectedCity) return
 
         setSearched(true)
@@ -228,7 +271,7 @@ export default function Landing() {
                     <button
                         type="submit"
                         className="landing__search-btn"
-                        disabled={!cityValid || isLoadingImages}
+                        disabled={(!cityValid && !isSecretCode) || isLoadingImages}
                     >
                         {isLoadingImages ? (
                             <span className="landing__spinner" />
@@ -250,6 +293,20 @@ export default function Landing() {
                     </button>
                 </div>
             </motion.form>
+
+            <AnimatePresence>
+                {creditMessage && (
+                    <motion.div
+                        className="landing__credit-msg"
+                        initial={{ opacity: 0, y: -10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -10 }}
+                        transition={{ duration: 0.3 }}
+                    >
+                        {creditMessage}
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
             {searched && (
                 <motion.section
